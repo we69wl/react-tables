@@ -8,13 +8,13 @@ function App() {
   const [showModal, setShowModal] = useState(false);
   const [activeTab, setActiveTab] = useState('monitoring');
   const [activeModalTab, setActiveModalTab] = useState('monitoring');
-  
+
   // Состояния загрузки для iframe на странице
   const [loadingTab, setLoadingTab] = useState({
     monitoring: true,
     analytics: true
   });
-  
+
   // Состояние загрузки для iframe в модалке
   const [loadingModal, setLoadingModal] = useState(true);
 
@@ -22,11 +22,11 @@ function App() {
   const tables = {
     monitoring: {
       title: 'Мониторинг цен',
-      url: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTtUkLDhq_C83DBNdZrJouNv4kvOSMGBdBPrvlcrGJqh-WAyeVycMGbDKhdbJ7uxLnSVTu1ogO8NvL3/pubhtml?widget=false&amp;headers=false'
+      url: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTtUkLDhq_C83DBNdZrJouNv4kvOSMGBdBPrvlcrGJqh-WAyeVycMGbDKhdbJ7uxLnSVTu1ogO8NvL3/pubhtml?gid=0&single=true&widget=false&chrome=false&headers=false'
     },
     analytics: {
       title: 'Анализ конкурентов',
-      url: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSh4juL254OaBTBuinUJ6wxm0c2YaQbnu_aCCR46qttolPH1y9-YCq9Ic-XoE1ZNxiDVXTjsX9LhLor/pubhtml?widget=false&amp;headers=false'
+      url: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSh4juL254OaBTBuinUJ6wxm0c2YaQbnu_aCCR46qttolPH1y9-YCq9Ic-XoE1ZNxiDVXTjsX9LhLor/pubhtml?gid=0&single=true&widget=false&chrome=false&headers=false'
     }
   };
 
@@ -79,8 +79,8 @@ function App() {
             <div className="p-3 border rounded bg-light">
               <div className="d-flex justify-content-between align-items-center mb-3">
                 <h4>Мониторинг цен</h4>
-                <Button 
-                  variant="outline-primary" 
+                <Button
+                  variant="outline-primary"
                   size="sm"
                   onClick={() => handleShowModal('monitoring')}
                 >
@@ -122,7 +122,7 @@ function App() {
               </div>
             </div>
           </Tab>
-          
+
           <Tab eventKey="analytics" title="🔍 Анализ конкурентов">
             <div className="p-3 border rounded bg-light">
               <div className="d-flex justify-content-between align-items-center mb-3">
@@ -159,8 +159,8 @@ function App() {
                   title="Анализ конкурентов"
                   width="100%"
                   height="500"
-                  style={{ 
-                    border: '1px solid #dee2e6', 
+                  style={{
+                    border: '1px solid #dee2e6',
                     borderRadius: '8px',
                     display: loadingTab.analytics ? 'none' : 'block'
                   }}
@@ -183,8 +183,8 @@ function App() {
       </Container>
 
       {/* МОДАЛЬНОЕ ОКНО С ЛИСТАЛКОЙ ТАБЛИЦ */}
-      <Modal 
-        show={showModal} 
+      <Modal
+        show={showModal}
         onHide={handleCloseModal}
         size="xl"
         fullscreen="lg-down"
@@ -195,8 +195,8 @@ function App() {
         </Modal.Header>
         <Modal.Body style={{ padding: 0, height: '80vh', display: 'flex', flexDirection: 'column' }}>
           {/* Вкладки для переключения таблиц */}
-          <div style={{ 
-            display: 'flex', 
+          <div style={{
+            display: 'flex',
             borderBottom: '1px solid #dee2e6',
             background: '#f8f9fa',
             padding: '0 20px',
@@ -231,7 +231,7 @@ function App() {
               🔍 Анализ конкурентов
             </button>
           </div>
-          
+
           {/* Iframe с лоадером */}
           <div style={{ flex: 1, position: 'relative' }}>
             {loadingModal && (
@@ -257,7 +257,7 @@ function App() {
               title={tables[activeModalTab].title}
               width="100%"
               height="100%"
-              style={{ 
+              style={{
                 border: 'none',
                 display: loadingModal ? 'none' : 'block'
               }}
