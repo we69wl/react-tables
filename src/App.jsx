@@ -424,9 +424,35 @@ function App() {
       <TableModal
         show={showCustomModal}
         onHide={() => setShowCustomModal(false)}
-        title="🎨 Кастомная таблица — поиск, пагинация"
+        title="Таблица из Google Sheets"
         tablesData={tables}
         type="custom"
+        initialTabs={[
+          {
+            key: "ozon-prices",
+            label: "Цены Ozon",
+            spreadsheetId: "1PcE9G2QQ6lCIxKT5_SUleIOkVGfhigMYL58YBoD5jOI",
+            sheetName: "Ozon",
+          },
+          {
+            key: "ozon-pirates",
+            label: "Отслеживание пиратов",
+            spreadsheetId: "1RHrn3-p1P4DpA4fFdg-s9zUY45hkyp8ImK22i4SSteU",
+            sheetName: "Выгрузка",
+          },
+          {
+            key: "example-sheet",
+            label: "Example Sheet",
+            spreadsheetId: "1khnG5jKXQ5j3HJUcKwBrrKZ54ol8bwRqcojGI1vKF4U",
+            sheetName: "Class Data",
+          },
+          {
+            key: "new-table",
+            label: "Новая таблица 2",
+            spreadsheetId: "1OfY1Q_5wO6XmZ7kCn8P7xrhNv--AfgioDN3BnIJXVIg",
+            sheetName: "Лист4",
+          },
+        ]}
       />
     </>
   );
