@@ -11,7 +11,7 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
   const [activeModalTab, setActiveModalTab] = useState(tabs[0]?.key ?? "");
   const [loadingModal, setLoadingModal] = useState({});
 
-  // Per-tab data: { [key]: { headers, data, columnWidths, loading, error } }
+  // Per-tab data: { [key]: { headers, data, columnWidths, rowHeights, loading, error } }
   const [tabsState, setTabsState] = useState({});
 
   // Tracks which tabs have already been fetched in this open session
@@ -23,7 +23,7 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
   const fetchSheetData = useCallback(async (tabKey, spreadsheetId, sheetName) => {
     setTabsState((prev) => ({
       ...prev,
-      [tabKey]: { headers: [], data: [], columnWidths: [], loading: true, error: null },
+      [tabKey]: { headers: [], data: [], columnWidths: [], rowHeights: {}, loading: true, error: null },
     }));
     try {
       const res = await fetch(
@@ -40,6 +40,7 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
           headers: json.headers ?? [],
           data: json.data ?? [],
           columnWidths: json.columnWidths ?? [],
+          rowHeights: json.rowHeights ?? {},
           loading: false,
           error: null,
         },
@@ -47,7 +48,7 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
     } catch (e) {
       setTabsState((prev) => ({
         ...prev,
-        [tabKey]: { headers: [], data: [], columnWidths: [], loading: false, error: e.message },
+        [tabKey]: { headers: [], data: [], columnWidths: [], rowHeights: {}, loading: false, error: e.message },
       }));
     }
   }, []);
@@ -73,8 +74,16 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
   }, [show, tabs]);
 
   // Force re-fetch (bypasses the "already loaded" guard)
+  // Also clears localStorage row heights so fresh server heights are applied
   const handleRefresh = useCallback(
-    (tab) => {
+    (tab, tableName) => {
+      try {
+        // Сбрасываем высоты строк
+        localStorage.removeItem(`table_${tableName}_row_heights`);
+        // Сбрасываем ширины колонок
+        localStorage.removeItem(`table_${tableName}_column_widths`);
+      } catch { /* ignore */ }
+
       loadedTabsRef.current.delete(tab.key);
       fetchSheetData(tab.key, tab.spreadsheetId, tab.sheetName);
     },
@@ -136,7 +145,7 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
   // ── Custom table rendering (server-fetched data) ──────────────────────────
   const renderCustomTable = () => {
     const tabState = tabsState[activeModalTab] ?? {};
-    const { headers = [], data = [], columnWidths = [], loading = false, error = null } = tabState;
+    const { headers = [], data = [], columnWidths = [], rowHeights = {}, loading = false, error = null } = tabState;
     const currentTab = tabs.find((t) => t.key === activeModalTab);
 
     return (
@@ -186,7 +195,7 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
             </div>
             <button
               className="btn btn-outline-danger btn-sm"
-              onClick={() => currentTab && handleRefresh(currentTab)}
+              onClick={() => currentTab && handleRefresh(currentTab, activeModalTab)}
             >
               Повторить
             </button>
@@ -202,6 +211,7 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
               height="100%"
               tableName={activeModalTab}
               initialColWidths={columnWidths.length ? columnWidths : null}
+              initialRowHeights={Object.keys(rowHeights).length > 0 ? rowHeights : null}
               sheetName={currentTab?.sheetName}
               showSearch={showSearch}
             />
@@ -247,10 +257,10 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
             className="btn me-2"
             onClick={() => {
               const tab = tabs.find((t) => t.key === activeModalTab);
-              if (tab) handleRefresh(tab);
+              if (tab) handleRefresh(tab, activeModalTab);
             }}
             disabled={tabsState[activeModalTab]?.loading}
-            title="Обновить данные"
+            title="Обновить данные (высоты строк и ширина колонок сбросятся к исходным)"
             aria-label="Обновить"
             style={{
               opacity: tabsState[activeModalTab]?.loading ? 0.5 : 1,

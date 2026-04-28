@@ -5,12 +5,36 @@ const MIN_COL_WIDTH = 100;
 const MAX_COL_WIDTH = 400;
 const DEFAULT_COL_WIDTH = 160;
 
+const MIN_ROW_HEIGHT = 30;
+const MAX_ROW_HEIGHT = 300;
+const DEFAULT_ROW_HEIGHT = 36;
+
+// CSS styles for row resize handle (using ::after pseudo-element)
+const ROW_RESIZE_STYLES = `
+  .resizable-row {
+    position: relative;
+  }
+  .resizable-row::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 4px;  /* небольшая невидимая зона для захвата */
+    cursor: ns-resize;
+    background-color: transparent;  /* ← убрать серый цвет */
+    z-index: 10;
+    pointer-events: auto;
+  }
+`;
+
 function VirtualizedTable({
   data = [],
   headers = [],
   height = "400px",
   tableName = "default", // used as localStorage key namespace
   initialColWidths = null, // server-provided widths (Google Sheets pixel sizes); overridden by localStorage
+  initialRowHeights = null, // server-provided heights (Google Sheets pixel sizes); overridden by localStorage
   sheetName = null,    // displayed in the footer, e.g. "Ozon"
   showSearch = true,   // set false to hide the search input (e.g. when modal has its own controls)
 }) {
@@ -20,6 +44,7 @@ function VirtualizedTable({
   const [inputValue, setInputValue] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const debounceRef = useRef();
+  const resizingRowRef = useRef(null); // { dataIndex, startY, startHeight }
 
   // ── Zoom (0.5x – 2x, step 0.1) ───────────────────────────────────────────
   const [zoom, setZoom] = useState(1);
@@ -52,6 +77,39 @@ function VirtualizedTable({
   useEffect(() => {
     setColWidths(getInitialWidths());
   }, [getInitialWidths]);
+
+  // ── Row heights — loaded from / saved to localStorage ──────────────────
+  // Stored as object: { dataIndex: height, ... }
+  // Keys are indices in the original `data` array, so heights follow rows during sort/filter
+  // Priority: localStorage > initialRowHeights (from Google Sheets) > DEFAULT_ROW_HEIGHT
+  const rowHeightsStorageKey = `table_${tableName}_row_heights`;
+
+  const getInitialRowHeights = useCallback(() => {
+    // 1. Priority: localStorage (user's custom heights)
+    try {
+      const saved = localStorage.getItem(rowHeightsStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed === "object" && parsed !== null) return parsed;
+      }
+    } catch { /* ignore malformed localStorage value */ }
+
+    // 2. Then: initialRowHeights from Google Sheets API
+    if (initialRowHeights && typeof initialRowHeights === "object") {
+      return initialRowHeights;
+    }
+
+    // 3. Default: empty object (will use DEFAULT_ROW_HEIGHT for all rows)
+    return {};
+  }, [rowHeightsStorageKey, initialRowHeights]);
+
+  const [rowHeights, setRowHeights] = useState(getInitialRowHeights);
+
+  // Reset row heights when table changes
+  useEffect(() => {
+    // Re-initialize with the same logic (localStorage > initialRowHeights > default)
+    setRowHeights(getInitialRowHeights());
+  }, [tableName, getInitialRowHeights]);
 
   // ── Column resize via drag ────────────────────────────────────────────────
   const [isResizing, setIsResizing] = useState(false);
@@ -165,6 +223,79 @@ function VirtualizedTable({
   const totalFiltered = sortedData.length;
   const visibleData = sortedData.slice(0, showRows);
 
+  // ── Row resize via drag ───────────────────────────────────────────────────
+  // Similar to column resize, but for row height (drag along vertical axis)
+  // Defined after visibleData to avoid ESLint hoisting warnings
+  const handleRowResizeMouseDown = useCallback(
+    (e, rowIndex) => {
+      // Check if click was near the bottom edge of the row (in the handle area)
+      const trElement = e.currentTarget;
+      const rect = trElement.getBoundingClientRect();
+      const distanceFromBottom = rect.bottom - e.clientY;
+
+      // Allow drag if click is within 10px of the bottom edge (handle area)
+      if (distanceFromBottom > 10) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Get the row from visibleData and find its index in the original data
+      const row = visibleData[rowIndex];
+      const dataIndex = data.indexOf(row);
+      // Fallback: if row not found in data (e.g., after sort/filter), use visible index
+      const safeIndex = dataIndex !== -1 ? dataIndex : rowIndex;
+
+      const currentHeight = rowHeights[safeIndex] || DEFAULT_ROW_HEIGHT;
+
+      resizingRowRef.current = {
+        dataIndex: safeIndex,
+        startY: e.clientY,
+        startHeight: currentHeight,
+        trElement, // Store reference to <tr> for direct DOM updates
+      };
+
+      const onMouseMove = (moveE) => {
+        const r = resizingRowRef.current;
+        if (!r) return;
+
+        const newHeight = Math.max(
+          MIN_ROW_HEIGHT,
+          Math.min(MAX_ROW_HEIGHT, r.startHeight + moveE.clientY - r.startY)
+        );
+
+        // Update the specific row's height in state (React re-renders only if needed)
+        setRowHeights((prev) => {
+          const next = { ...prev };
+          next[r.dataIndex] = newHeight;
+          return next;
+        });
+
+        // Optionally, update the <tr> element directly for smoother visual feedback
+        // (This is optional; React's re-render is usually fast enough)
+        if (r.trElement) {
+          r.trElement.style.height = `${newHeight}px`;
+        }
+      };
+
+      const onMouseUp = () => {
+        // Persist final heights to localStorage when drag ends
+        setRowHeights((prev) => {
+          try {
+            localStorage.setItem(rowHeightsStorageKey, JSON.stringify(prev));
+          } catch { /* ignore localStorage write failures */ }
+          return prev;
+        });
+        resizingRowRef.current = null;
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+      };
+
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    },
+    [visibleData, data, rowHeights, rowHeightsStorageKey]
+  );
+
   useEffect(
     () => () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -192,11 +323,13 @@ function VirtualizedTable({
   const isZoomed = zoom !== 1;
 
   return (
-    <div
-      ref={containerRef}
-      className="w-100 h-100 d-flex flex-column border rounded shadow-sm overflow-hidden"
-      style={{ height }}
-    >
+    <>
+      <style>{ROW_RESIZE_STYLES}</style>
+      <div
+        ref={containerRef}
+        className="w-100 h-100 d-flex flex-column border rounded shadow-sm overflow-hidden"
+        style={{ height }}
+      >
       {/* Toolbar: search + zoom controls */}
       {showSearch && (
         <div className="p-3 bg-light border-bottom flex-shrink-0">
@@ -363,31 +496,43 @@ function VirtualizedTable({
                 </tr>
               </thead>
               <tbody>
-                {visibleData.map((row, rowIndex) => (
-                  <tr key={rowIndex} className="align-middle table-hover-row">
-                    {headers.map((_, colIndex) => (
-                      <td
-                        key={colIndex}
-                        className="border-end small align-middle"
-                        style={{
-                          width: colWidths[colIndex],
-                          padding: "10px 12px",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                          backgroundColor:
-                            rowIndex % 2 ? "#f8f9fa" : "transparent",
-                          boxSizing: "border-box",
-                        }}
-                        title={row[colIndex]?.toString() || ""}
-                      >
-                        {row[colIndex] || (
-                          <span className="text-muted small">—</span>
-                        )}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
+                {visibleData.map((row, rowIndex) => {
+                  const dataIndex = data.indexOf(row);
+                  const rowHeight = rowHeights[dataIndex] || DEFAULT_ROW_HEIGHT;
+
+                  return (
+                    <tr
+                      key={rowIndex}
+                      className="align-middle table-hover-row resizable-row"
+                      style={{
+                        height: `${rowHeight}px`,
+                      }}
+                      onMouseDown={(e) => handleRowResizeMouseDown(e, rowIndex)}
+                    >
+                      {headers.map((_, colIndex) => (
+                        <td
+                          key={colIndex}
+                          className="border-end small align-middle"
+                          style={{
+                            width: colWidths[colIndex],
+                            padding: "10px 12px",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            backgroundColor:
+                              rowIndex % 2 ? "#f8f9fa" : "transparent",
+                            boxSizing: "border-box",
+                          }}
+                          title={row[colIndex]?.toString() || ""}
+                        >
+                          {row[colIndex] || (
+                            <span className="text-muted small">—</span>
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -418,6 +563,7 @@ function VirtualizedTable({
         </div>
       )}
     </div>
+  </>
   );
 }
 

@@ -67,7 +67,7 @@ app.get("/api/sheet-data", async (req, res) => {
       }),
       sheets.spreadsheets.get({
         spreadsheetId,
-        fields: "sheets(properties(title),data(columnMetadata(pixelSize)))",
+        fields: "sheets(properties(title),data(columnMetadata(pixelSize),rowMetadata(pixelSize)))",
       }),
     ]);
 
@@ -77,11 +77,24 @@ app.get("/api/sheet-data", async (req, res) => {
     const colMeta = sheetMeta?.data?.[0]?.columnMetadata ?? [];
     const columnWidths = colMeta.map((col) => col.pixelSize || 100);
 
+    // Extract row heights from Google Sheets metadata
+    // Note: rowMetadata includes headers (row 0), but data array excludes them
+    // So we need to skip index 0 and shift indices: rowHeights[0] = rowMeta[1].pixelSize
+    const rowMeta = sheetMeta?.data?.[0]?.rowMetadata ?? [];
+    const rowHeights = {}; // { dataIndex: heightInPixels }
+    rowMeta.forEach((row, idx) => {
+      // Skip header row (idx 0), start from data rows (idx >= 1)
+      // Map to data indices: rowMeta[1] → rowHeights[0], rowMeta[2] → rowHeights[1], etc.
+      if (row.pixelSize && idx >= 1) {
+        rowHeights[idx - 1] = row.pixelSize;
+      }
+    });
+
     const rows = valuesRes.data.values ?? [];
     const headers = rows[0] ?? [];
     const data = rows.slice(1);
 
-    const result = { headers, data, columnWidths };
+    const result = { headers, data, columnWidths, rowHeights };
     setCached(cacheKey, result);
     res.json(result);
   } catch (err) {
