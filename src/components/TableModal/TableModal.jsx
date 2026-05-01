@@ -27,7 +27,7 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
     }));
     try {
       const res = await fetch(
-        `${API_BASE}/api/sheet-data?spreadsheetId=${encodeURIComponent(spreadsheetId)}&sheetName=${encodeURIComponent(sheetName)}`
+        `${API_BASE}/sheet-data?spreadsheetId=${encodeURIComponent(spreadsheetId)}&sheetName=${encodeURIComponent(sheetName)}`
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
