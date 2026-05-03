@@ -452,6 +452,16 @@ function App() {
             spreadsheetId: "1OfY1Q_5wO6XmZ7kCn8P7xrhNv--AfgioDN3BnIJXVIg",
             sheetName: "Лист4",
           },
+          {
+            key: "catalog",
+            label: "Файл с сервера (каталог)",
+            jsonUrl: "/catalog.json"
+          },
+          {
+            key: "posts",
+            label: "Файл с внешнего URL (posts)",
+            jsonUrl: "https://jsonplaceholder.typicode.com/posts"
+          }
         ]}
       />
     </>

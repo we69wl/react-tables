@@ -215,3 +215,26 @@
 .overflow-auto::-webkit-scrollbar-thumb:hover {
   background: #6c757d;
 }
+
+/* Скрываем скроллбар на десктопе, но оставляем возможность скролла */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
+/* Для мобильных устройств скроллбар будет виден автоматически */
+@media (max-width: 768px) {
+  .hide-scrollbar::-webkit-scrollbar {
+    display: block; /* показываем на мобильных */
+    height: 4px; /* делаем тонким, но видимым */
+  }
+
+  .hide-scrollbar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+  }
+
+  .hide-scrollbar::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+  }
+}

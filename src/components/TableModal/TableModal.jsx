@@ -26,20 +26,52 @@ function TableModal({
 
   const [showSearch, setShowSearch] = useState(false);
 
+  const setTabLoading = useCallback((tabKey) => {
+    setTabsState((prev) => ({
+      ...prev,
+      [tabKey]: {
+        headers: [],
+        data: [],
+        columnWidths: [],
+        rowHeights: {},
+        loading: true,
+        error: null,
+      },
+    }));
+  }, []);
+
+  const setTabResult = useCallback((tabKey, json) => {
+    setTabsState((prev) => ({
+      ...prev,
+      [tabKey]: {
+        headers: json.headers ?? [],
+        data: json.data ?? [],
+        columnWidths: json.columnWidths ?? [],
+        rowHeights: json.rowHeights ?? {},
+        loading: false,
+        error: null,
+      },
+    }));
+  }, []);
+
+  const setTabError = useCallback((tabKey, message) => {
+    setTabsState((prev) => ({
+      ...prev,
+      [tabKey]: {
+        headers: [],
+        data: [],
+        columnWidths: [],
+        rowHeights: {},
+        loading: false,
+        error: message,
+      },
+    }));
+  }, []);
+
   // Fetch sheet data from the Express server
   const fetchSheetData = useCallback(
     async (tabKey, spreadsheetId, sheetName) => {
-      setTabsState((prev) => ({
-        ...prev,
-        [tabKey]: {
-          headers: [],
-          data: [],
-          columnWidths: [],
-          rowHeights: {},
-          loading: true,
-          error: null,
-        },
-      }));
+      setTabLoading(tabKey);
       try {
         const res = await fetch(
           `${API_BASE}/sheet-data?spreadsheetId=${encodeURIComponent(
@@ -50,33 +82,43 @@ function TableModal({
           const body = await res.json().catch(() => ({}));
           throw new Error(body.error || `HTTP ${res.status}`);
         }
-        const json = await res.json();
-        setTabsState((prev) => ({
-          ...prev,
-          [tabKey]: {
-            headers: json.headers ?? [],
-            data: json.data ?? [],
-            columnWidths: json.columnWidths ?? [],
-            rowHeights: json.rowHeights ?? {},
-            loading: false,
-            error: null,
-          },
-        }));
+        setTabResult(tabKey, await res.json());
       } catch (e) {
-        setTabsState((prev) => ({
-          ...prev,
-          [tabKey]: {
-            headers: [],
-            data: [],
-            columnWidths: [],
-            rowHeights: {},
-            loading: false,
-            error: e.message,
-          },
-        }));
+        setTabError(tabKey, e.message);
       }
     },
-    []
+    [setTabLoading, setTabResult, setTabError]
+  );
+
+  // Fetch JSON file data from the Express server
+  const fetchJsonData = useCallback(
+    async (tabKey, jsonUrl) => {
+      setTabLoading(tabKey);
+      try {
+        const res = await fetch(
+          `${API_BASE}/json-data?url=${encodeURIComponent(jsonUrl)}`
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        setTabResult(tabKey, await res.json());
+      } catch (e) {
+        setTabError(tabKey, e.message);
+      }
+    },
+    [setTabLoading, setTabResult, setTabError]
+  );
+
+  const fetchTab = useCallback(
+    (tab) => {
+      if (tab.jsonUrl) {
+        fetchJsonData(tab.key, tab.jsonUrl);
+      } else {
+        fetchSheetData(tab.key, tab.spreadsheetId, tab.sheetName);
+      }
+    },
+    [fetchJsonData, fetchSheetData]
   );
 
   // Lazy-load: fetch active tab once per modal open session
@@ -86,36 +128,41 @@ function TableModal({
     if (!tab) return;
     if (!loadedTabsRef.current.has(tab.key)) {
       loadedTabsRef.current.add(tab.key);
-      fetchSheetData(tab.key, tab.spreadsheetId, tab.sheetName);
+      fetchTab(tab);
     }
-  }, [show, type, activeModalTab, tabs, fetchSheetData]);
+  }, [show, type, activeModalTab, tabs, fetchTab]);
 
-  // Reset all state when modal closes
+  // Reset state on close; initialize iframe spinners on open
   useEffect(() => {
-    if (!show) {
+    if (show) {
+      if (type === "iframe" && tablesData) {
+        setLoadingModal(
+          Object.fromEntries(Object.keys(tablesData).map((k) => [k, true]))
+        );
+      }
+    } else {
       setTabsState({});
+      setLoadingModal({});
       loadedTabsRef.current.clear();
       setActiveModalTab(tabs[0]?.key ?? "");
     }
-  }, [show, tabs]);
+  }, [show, tabs, type, tablesData]);
 
   // Force re-fetch (bypasses the "already loaded" guard)
   // Also clears localStorage row heights so fresh server heights are applied
   const handleRefresh = useCallback(
     (tab, tableName) => {
       try {
-        // Сбрасываем высоты строк
         localStorage.removeItem(`table_${tableName}_row_heights`);
-        // Сбрасываем ширины колонок
         localStorage.removeItem(`table_${tableName}_column_widths`);
       } catch {
         /* ignore */
       }
 
       loadedTabsRef.current.delete(tab.key);
-      fetchSheetData(tab.key, tab.spreadsheetId, tab.sheetName);
+      fetchTab(tab);
     },
-    [fetchSheetData]
+    [fetchTab]
   );
 
   const handleModalLoad = useCallback((tabKey) => {
@@ -207,7 +254,11 @@ function TableModal({
             background: "#f8f9fa",
             padding: "0 20px",
             flexShrink: 0,
+            overflowX: "auto",
+            scrollbarWidth: "none",
+            msOverflowStyle: "none",
           }}
+          className="hide-scrollbar"
         >
           {tabs.map((tab) => (
             <button
@@ -289,7 +340,7 @@ function TableModal({
         {type === "custom" && (
           <button
             type="button"
-            className="btn me-2"
+            className={`btn me-2 ${showSearch ? "text-primary" : "text-dark"}`}
             onClick={() => {
               setShowSearch(!showSearch);
             }}
@@ -302,7 +353,7 @@ function TableModal({
               border: "none",
             }}
           >
-            <i className="bi bi-search text-dark" />
+            <i className="bi bi-search" />
           </button>
         )}
         {type === "custom" && (

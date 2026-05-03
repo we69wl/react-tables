@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Spinner, FloatingLabel, Form } from "react-bootstrap";
 
 const MIN_COL_WIDTH = 100;
-const MAX_COL_WIDTH = 400;
+const MAX_COL_WIDTH = 1000;
 const DEFAULT_COL_WIDTH = 160;
 
 const MIN_ROW_HEIGHT = 30;
@@ -20,9 +20,9 @@ const ROW_RESIZE_STYLES = `
     bottom: 0;
     left: 0;
     right: 0;
-    height: 4px;  /* небольшая невидимая зона для захвата */
+    height: 4px;
     cursor: ns-resize;
-    background-color: transparent;  /* ← убрать серый цвет */
+    background-color: transparent;
     z-index: 10;
     pointer-events: auto;
   }
@@ -38,7 +38,6 @@ function VirtualizedTable({
   sheetName = null, // displayed in the footer, e.g. "Ozon"
   showSearch = true, // set false to hide the search input (e.g. when modal has its own controls)
 }) {
-  const containerRef = useRef(null);
   const inputRef = useRef(null);
   const [showRows, setShowRows] = useState(30);
   const [inputValue, setInputValue] = useState("");
@@ -47,6 +46,7 @@ function VirtualizedTable({
   const resizingRowRef = useRef(null); // { dataIndex, startY, startHeight }
 
   // ── Zoom (0.5x – 2x, step 0.1) ───────────────────────────────────────────
+  // Implemented via font-size + padding scaling to preserve position:sticky on headers.
   const [zoom, setZoom] = useState(1);
 
   // ── Column widths — loaded from / saved to localStorage ──────────────────
@@ -238,8 +238,6 @@ function VirtualizedTable({
   const visibleData = sortedData.slice(0, showRows);
 
   // ── Row resize via drag ───────────────────────────────────────────────────
-  // Similar to column resize, but for row height (drag along vertical axis)
-  // Defined after visibleData to avoid ESLint hoisting warnings
   const handleRowResizeMouseDown = useCallback(
     (e, rowIndex) => {
       // Check if click was near the bottom edge of the row (in the handle area)
@@ -265,7 +263,7 @@ function VirtualizedTable({
         dataIndex: safeIndex,
         startY: e.clientY,
         startHeight: currentHeight,
-        trElement, // Store reference to <tr> for direct DOM updates
+        trElement,
       };
 
       const onMouseMove = (moveE) => {
@@ -277,22 +275,18 @@ function VirtualizedTable({
           Math.min(MAX_ROW_HEIGHT, r.startHeight + moveE.clientY - r.startY)
         );
 
-        // Update the specific row's height in state (React re-renders only if needed)
         setRowHeights((prev) => {
           const next = { ...prev };
           next[r.dataIndex] = newHeight;
           return next;
         });
 
-        // Optionally, update the <tr> element directly for smoother visual feedback
-        // (This is optional; React's re-render is usually fast enough)
         if (r.trElement) {
           r.trElement.style.height = `${newHeight}px`;
         }
       };
 
       const onMouseUp = () => {
-        // Persist final heights to localStorage when drag ends
         setRowHeights((prev) => {
           try {
             localStorage.setItem(rowHeightsStorageKey, JSON.stringify(prev));
@@ -335,14 +329,15 @@ function VirtualizedTable({
   }
 
   const totalTableWidth = colWidths.reduce((s, w) => s + w, 0);
-  // CSS zoom breaks position:sticky in some browsers; fall back to relative when zoomed
-  const isZoomed = zoom !== 1;
+
+  // Scaled padding helpers — proportional to zoom level
+  const thPadding = `${Math.round(zoom * 10)}px ${Math.round(zoom * 20)}px ${Math.round(zoom * 10)}px ${Math.round(zoom * 12)}px`;
+  const tdPadding = `${Math.round(zoom * 10)}px ${Math.round(zoom * 12)}px`;
 
   return (
     <>
       <style>{ROW_RESIZE_STYLES}</style>
       <div
-        ref={containerRef}
         className="w-100 h-100 d-flex flex-column border rounded shadow-sm overflow-hidden"
         style={{ height }}
       >
@@ -463,110 +458,124 @@ function VirtualizedTable({
             className="flex-grow-1 overflow-auto"
             style={{ scrollbarWidth: "thin" }}
           >
-            {/* CSS zoom scales layout so scrollbars reflect actual content size.
-              Applied only when zoom != 1 to avoid unnecessary style recalculations. */}
-            <div style={isZoomed ? { zoom } : undefined}>
-              <table
-                className="table table-sm m-0"
-                style={{ tableLayout: "fixed", width: totalTableWidth }}
-              >
-                <thead>
-                  <tr className="table-light">
-                    {headers.map((header, idx) => (
-                      <th
-                        key={idx}
-                        className="fw-semibold border-end"
-                        style={{
-                          width: colWidths[idx],
-                          // Sticky headers are disabled while zoomed because CSS zoom
-                          // can misalign the sticky offset in some browsers
-                          position: isZoomed ? "relative" : "sticky",
-                          top: isZoomed ? undefined : 0,
-                          zIndex: 10,
-                          backgroundColor: "white",
-                          borderBottom: "2px solid #dee2e6",
-                          padding: "10px 20px 10px 12px", // right padding clears resize handle
-                          cursor: "pointer",
-                          userSelect: "none",
-                          overflow: "hidden",
-                          whiteSpace: "nowrap",
-                          textOverflow: "ellipsis",
-                          boxSizing: "border-box",
-                        }}
-                        title={header}
-                        onClick={() => handleSortClick(idx)}
-                      >
-                        {header}
-                        {/* Sort direction indicator */}
-                        {sortCol === idx && (
-                          <span
-                            className="ms-1 text-primary"
-                            style={{ fontSize: "0.75em" }}
-                          >
-                            {sortDir === "asc" ? "↑" : "↓"}
-                          </span>
-                        )}
-                        {/* Drag handle — sits over the right edge of the header cell */}
+            <table
+              className="table table-sm m-0"
+              style={{
+                tableLayout: "fixed",
+                width: totalTableWidth,
+                fontSize: `${zoom}rem`,
+              }}
+            >
+              <thead>
+                <tr className="table-light">
+                  {headers.map((header, idx) => (
+                    <th
+                      key={idx}
+                      className="fw-semibold border-end"
+                      style={{
+                        width: colWidths[idx],
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 10,
+                        backgroundColor: "white",
+                        borderBottom: "2px solid #dee2e6",
+                        padding: thPadding,
+                        cursor: "pointer",
+                        userSelect: "none",
+                        overflow: "hidden",
+                        whiteSpace: "nowrap",
+                        textOverflow: "ellipsis",
+                        boxSizing: "border-box",
+                      }}
+                      title={header}
+                      onClick={() => handleSortClick(idx)}
+                    >
+                      {header}
+                      {/* Sort direction indicator */}
+                      {sortCol === idx && (
                         <span
-                          style={{
-                            position: "absolute",
-                            right: 0,
-                            top: 0,
-                            bottom: 0,
-                            width: "5px",
-                            cursor: "col-resize",
-                            zIndex: 20,
-                          }}
-                          onMouseDown={(e) => handleResizeMouseDown(e, idx)}
-                        />
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleData.map((row, rowIndex) => {
-                    const dataIndex = data.indexOf(row);
-                    const rowHeight =
-                      rowHeights[dataIndex] || DEFAULT_ROW_HEIGHT;
-
-                    return (
-                      <tr
-                        key={rowIndex}
-                        className="align-middle table-hover-row resizable-row"
+                          className="ms-1 text-primary"
+                          style={{ fontSize: "0.75em" }}
+                        >
+                          {sortDir === "asc" ? "↑" : "↓"}
+                        </span>
+                      )}
+                      {/* Drag handle — sits over the right edge of the header cell */}
+                      <span
                         style={{
-                          height: `${rowHeight}px`,
+                          position: "absolute",
+                          right: 0,
+                          top: 0,
+                          bottom: 0,
+                          width: "5px",
+                          cursor: "col-resize",
+                          zIndex: 20,
                         }}
-                        onMouseDown={(e) =>
-                          handleRowResizeMouseDown(e, rowIndex)
-                        }
-                      >
-                        {headers.map((_, colIndex) => (
-                          <td
-                            key={colIndex}
-                            className="border-end small align-middle"
+                        onMouseDown={(e) => handleResizeMouseDown(e, idx)}
+                      />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleData.map((row, rowIndex) => {
+                  const dataIndex = data.indexOf(row);
+                  const rowHeight =
+                    rowHeights[dataIndex] || DEFAULT_ROW_HEIGHT;
+
+                  return (
+                    <tr
+                      key={rowIndex}
+                      className="align-middle table-hover-row resizable-row"
+                      style={{
+                        height: `${rowHeight}px`,
+                      }}
+                      onMouseDown={(e) =>
+                        handleRowResizeMouseDown(e, rowIndex)
+                      }
+                    >
+                      {headers.map((_, colIndex) => (
+                        <td
+                          key={colIndex}
+                          className="border-end small align-middle"
+                          style={{
+                            position: "relative",
+                            width: colWidths[colIndex],
+                            padding: tdPadding,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            backgroundColor:
+                              rowIndex % 2 ? "#f8f9fa" : "transparent",
+                            boxSizing: "border-box",
+                          }}
+                          title={row[colIndex]?.toString() || ""}
+                        >
+                          {row[colIndex] || (
+                            <span className="text-muted small">—</span>
+                          )}
+                          {/* Column resize handle — mirrors the one in <th> */}
+                          <span
                             style={{
-                              width: colWidths[colIndex],
-                              padding: "10px 12px",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              backgroundColor:
-                                rowIndex % 2 ? "#f8f9fa" : "transparent",
-                              boxSizing: "border-box",
+                              position: "absolute",
+                              right: 0,
+                              top: 0,
+                              bottom: 0,
+                              width: "5px",
+                              cursor: "col-resize",
+                              zIndex: 1,
                             }}
-                            title={row[colIndex]?.toString() || ""}
-                          >
-                            {row[colIndex] || (
-                              <span className="text-muted small">—</span>
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                            onMouseDown={(e) =>
+                              handleResizeMouseDown(e, colIndex)
+                            }
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
 

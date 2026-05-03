@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import { google } from "googleapis";
 import credentials from "./credentials.json" with { type: "json" };
 import path from "path";
+import { readFile } from "fs/promises";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
@@ -101,6 +102,51 @@ app.get("/api/sheet-data", async (req, res) => {
     console.error("[sheet-data]", err.message);
     // Google API returns 400 for bad sheet names
     res.status(err.code === 400 ? 400 : 500).json({ error: err.message || "Failed to load sheet" });
+  }
+});
+
+// GET /api/json-data?url=...
+// Accepts either an absolute URL (https://...) or a local path (/catalog.json).
+// Local paths are resolved to server/data/<filename> and read from disk.
+// Expects JSON: [{ key: value, ... }, ...]
+app.get("/api/json-data", async (req, res) => {
+  const url = req.query.url?.trim();
+  if (!url) {
+    return res.status(400).json({ error: "Missing required query param: url" });
+  }
+
+  const cacheKey = `json::${url}`;
+  const cached = getCached(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    let jsonArray;
+
+    if (url.startsWith("/")) {
+      // Local file — read from server/data/, path.basename prevents traversal
+      const fileName = path.basename(url);
+      const filePath = path.join(process.cwd(), "server", "data", fileName);
+      const content = await readFile(filePath, "utf-8");
+      jsonArray = JSON.parse(content);
+    } else {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status} fetching ${url}`);
+      jsonArray = await response.json();
+    }
+
+    if (!Array.isArray(jsonArray) || jsonArray.length === 0) {
+      return res.status(400).json({ error: "Expected a non-empty JSON array" });
+    }
+
+    const headers = Object.keys(jsonArray[0]);
+    const data = jsonArray.map((row) => headers.map((h) => row[h] ?? ""));
+
+    const result = { headers, data, columnWidths: [], rowHeights: {} };
+    setCached(cacheKey, result);
+    res.json(result);
+  } catch (err) {
+    console.error("[json-data]", err.message);
+    res.status(500).json({ error: err.message || "Failed to load JSON" });
   }
 });
 
