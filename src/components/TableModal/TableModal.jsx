@@ -3,9 +3,16 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import VirtualizedTable from "../VirtualizedTable/VirtualizedTable";
 
 // Override via VITE_API_URL in .env for non-local deployments
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001/api";
 
-function TableModal({ show, onHide, title, type = "iframe", tablesData, initialTabs }) {
+function TableModal({
+  show,
+  onHide,
+  title,
+  type = "iframe",
+  tablesData,
+  initialTabs,
+}) {
   const tabs = useMemo(() => initialTabs ?? [], [initialTabs]);
 
   const [activeModalTab, setActiveModalTab] = useState(tabs[0]?.key ?? "");
@@ -20,38 +27,57 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
   const [showSearch, setShowSearch] = useState(false);
 
   // Fetch sheet data from the Express server
-  const fetchSheetData = useCallback(async (tabKey, spreadsheetId, sheetName) => {
-    setTabsState((prev) => ({
-      ...prev,
-      [tabKey]: { headers: [], data: [], columnWidths: [], rowHeights: {}, loading: true, error: null },
-    }));
-    try {
-      const res = await fetch(
-        `${API_BASE}/sheet-data?spreadsheetId=${encodeURIComponent(spreadsheetId)}&sheetName=${encodeURIComponent(sheetName)}`
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const json = await res.json();
+  const fetchSheetData = useCallback(
+    async (tabKey, spreadsheetId, sheetName) => {
       setTabsState((prev) => ({
         ...prev,
         [tabKey]: {
-          headers: json.headers ?? [],
-          data: json.data ?? [],
-          columnWidths: json.columnWidths ?? [],
-          rowHeights: json.rowHeights ?? {},
-          loading: false,
+          headers: [],
+          data: [],
+          columnWidths: [],
+          rowHeights: {},
+          loading: true,
           error: null,
         },
       }));
-    } catch (e) {
-      setTabsState((prev) => ({
-        ...prev,
-        [tabKey]: { headers: [], data: [], columnWidths: [], rowHeights: {}, loading: false, error: e.message },
-      }));
-    }
-  }, []);
+      try {
+        const res = await fetch(
+          `${API_BASE}/sheet-data?spreadsheetId=${encodeURIComponent(
+            spreadsheetId
+          )}&sheetName=${encodeURIComponent(sheetName)}`
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        const json = await res.json();
+        setTabsState((prev) => ({
+          ...prev,
+          [tabKey]: {
+            headers: json.headers ?? [],
+            data: json.data ?? [],
+            columnWidths: json.columnWidths ?? [],
+            rowHeights: json.rowHeights ?? {},
+            loading: false,
+            error: null,
+          },
+        }));
+      } catch (e) {
+        setTabsState((prev) => ({
+          ...prev,
+          [tabKey]: {
+            headers: [],
+            data: [],
+            columnWidths: [],
+            rowHeights: {},
+            loading: false,
+            error: e.message,
+          },
+        }));
+      }
+    },
+    []
+  );
 
   // Lazy-load: fetch active tab once per modal open session
   useEffect(() => {
@@ -82,7 +108,9 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
         localStorage.removeItem(`table_${tableName}_row_heights`);
         // Сбрасываем ширины колонок
         localStorage.removeItem(`table_${tableName}_column_widths`);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
 
       loadedTabsRef.current.delete(tab.key);
       fetchSheetData(tab.key, tab.spreadsheetId, tab.sheetName);
@@ -99,13 +127,21 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
     <>
       <div className="d-flex border-bottom bg-light p-2">
         <button
-          className={`btn flex-fill ${activeModalTab === "monitoring" ? "btn-primary" : "btn-outline-secondary"}`}
+          className={`btn flex-fill ${
+            activeModalTab === "monitoring"
+              ? "btn-primary"
+              : "btn-outline-secondary"
+          }`}
           onClick={() => setActiveModalTab("monitoring")}
         >
           📈 Мониторинг цен
         </button>
         <button
-          className={`btn flex-fill ${activeModalTab === "analytics" ? "btn-primary" : "btn-outline-secondary"}`}
+          className={`btn flex-fill ${
+            activeModalTab === "analytics"
+              ? "btn-primary"
+              : "btn-outline-secondary"
+          }`}
           onClick={() => setActiveModalTab("analytics")}
         >
           🔍 Анализ конкурентов
@@ -117,7 +153,10 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
             key={key}
             style={{
               position: "absolute",
-              top: 0, left: 0, right: 0, bottom: 0,
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
               display: activeModalTab === key ? "block" : "none",
             }}
           >
@@ -132,7 +171,10 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
               title={table.title}
               width="100%"
               height="100%"
-              style={{ border: "none", display: loadingModal[key] ? "none" : "block" }}
+              style={{
+                border: "none",
+                display: loadingModal[key] ? "none" : "block",
+              }}
               onLoad={() => handleModalLoad(key)}
               allowFullScreen
             />
@@ -145,7 +187,14 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
   // ── Custom table rendering (server-fetched data) ──────────────────────────
   const renderCustomTable = () => {
     const tabState = tabsState[activeModalTab] ?? {};
-    const { headers = [], data = [], columnWidths = [], rowHeights = {}, loading = false, error = null } = tabState;
+    const {
+      headers = [],
+      data = [],
+      columnWidths = [],
+      rowHeights = {},
+      loading = false,
+      error = null,
+    } = tabState;
     const currentTab = tabs.find((t) => t.key === activeModalTab);
 
     return (
@@ -168,7 +217,8 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
                 padding: "12px 20px",
                 border: "none",
                 background: activeModalTab === tab.key ? "#fff" : "transparent",
-                borderBottom: activeModalTab === tab.key ? "2px solid #0d6efd" : "none",
+                borderBottom:
+                  activeModalTab === tab.key ? "2px solid #0d6efd" : "none",
                 color: activeModalTab === tab.key ? "#0d6efd" : "#6c757d",
                 fontWeight: activeModalTab === tab.key ? "500" : "normal",
                 cursor: "pointer",
@@ -195,7 +245,9 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
             </div>
             <button
               className="btn btn-outline-danger btn-sm"
-              onClick={() => currentTab && handleRefresh(currentTab, activeModalTab)}
+              onClick={() =>
+                currentTab && handleRefresh(currentTab, activeModalTab)
+              }
             >
               Повторить
             </button>
@@ -211,7 +263,9 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
               height="100%"
               tableName={activeModalTab}
               initialColWidths={columnWidths.length ? columnWidths : null}
-              initialRowHeights={Object.keys(rowHeights).length > 0 ? rowHeights : null}
+              initialRowHeights={
+                Object.keys(rowHeights).length > 0 ? rowHeights : null
+              }
               sheetName={currentTab?.sheetName}
               showSearch={showSearch}
             />
@@ -273,7 +327,12 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
         )}
       </Modal.Header>
       <Modal.Body
-        style={{ padding: 0, height: "80vh", display: "flex", flexDirection: "column" }}
+        style={{
+          padding: 0,
+          height: "80vh",
+          display: "flex",
+          flexDirection: "column",
+        }}
       >
         {type === "iframe" ? renderIframe() : renderCustomTable()}
       </Modal.Body>
@@ -284,7 +343,9 @@ function TableModal({ show, onHide, title, type = "iframe", tablesData, initialT
         {type === "iframe" && tablesData[activeModalTab] && (
           <Button
             variant="primary"
-            onClick={() => window.open(tablesData[activeModalTab].url, "_blank")}
+            onClick={() =>
+              window.open(tablesData[activeModalTab].url, "_blank")
+            }
           >
             Открыть в новой вкладке
           </Button>
