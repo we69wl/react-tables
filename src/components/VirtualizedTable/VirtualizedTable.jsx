@@ -204,7 +204,7 @@ function VirtualizedTable({
     }, 350);
   };
 
-  const filteredData = useCallback(() => {
+  const filtered = useMemo(() => {
     if (!searchTerm.trim()) return data;
     return data.filter((row) =>
       headers.some((_, i) =>
@@ -212,8 +212,6 @@ function VirtualizedTable({
       )
     );
   }, [data, headers, searchTerm]);
-
-  const filtered = useMemo(() => filteredData(), [filteredData]);
 
   // Sort applied on top of search-filtered data
   const sortedData = useMemo(() => {
@@ -550,7 +548,9 @@ function VirtualizedTable({
                           }}
                           title={row[colIndex]?.toString() || ""}
                         >
-                          {row[colIndex] || (
+                          {row[colIndex] != null && row[colIndex] !== "" ? (
+                            row[colIndex]
+                          ) : (
                             <span className="text-muted small">—</span>
                           )}
                           {/* Column resize handle — mirrors the one in <th> */}
