@@ -20,7 +20,8 @@
     "googleapis": "^171.4.0",
     "react": "^19.2.4",
     "react-bootstrap": "^2.10.10",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "react-syntax-highlighter": "^16.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

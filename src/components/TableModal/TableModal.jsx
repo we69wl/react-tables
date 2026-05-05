@@ -1,6 +1,7 @@
 import { Modal, Button, Spinner } from "react-bootstrap";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import VirtualizedTable from "../VirtualizedTable/VirtualizedTable";
+import JsonCodeViewer from "../JsonCodeViewer/JsonCodeViewer";
 
 // Override via VITE_API_URL in .env for non-local deployments
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001/api";
@@ -25,6 +26,23 @@ function TableModal({
   const loadedTabsRef = useRef(new Set());
 
   const [showSearch, setShowSearch] = useState(false);
+
+  // "table" | "code" per tab — only relevant for tabs with jsonUrl
+  const [viewModes, setViewModes] = useState({});
+
+  const currentTab = useMemo(
+    () => tabs.find((t) => t.key === activeModalTab),
+    [tabs, activeModalTab]
+  );
+  const isJsonTab = !!currentTab?.jsonUrl;
+  const viewMode = viewModes[activeModalTab] ?? "table";
+
+  const setViewMode = useCallback(
+    (mode) => {
+      setViewModes((prev) => ({ ...prev, [activeModalTab]: mode }));
+    },
+    [activeModalTab]
+  );
 
   const setTabLoading = useCallback((tabKey) => {
     setTabsState((prev) => ({
@@ -143,6 +161,7 @@ function TableModal({
     } else {
       setTabsState({});
       setLoadingModal({});
+      setViewModes({});
       loadedTabsRef.current.clear();
       setActiveModalTab(tabs[0]?.key ?? "");
     }
@@ -242,7 +261,6 @@ function TableModal({
       loading = false,
       error = null,
     } = tabState;
-    const currentTab = tabs.find((t) => t.key === activeModalTab);
 
     return (
       <>
@@ -305,22 +323,28 @@ function TableModal({
           </div>
         )}
 
-        {/* Table — pass server column widths as initial widths */}
+        {/* Data view — table or raw JSON code */}
         {!loading && !error && headers.length > 0 && (
-          <div style={{ flex: 1, overflow: "hidden" }}>
-            <VirtualizedTable
-              data={data}
-              headers={headers}
-              height="100%"
-              tableName={activeModalTab}
-              initialColWidths={columnWidths.length ? columnWidths : null}
-              initialRowHeights={
-                Object.keys(rowHeights).length > 0 ? rowHeights : null
-              }
-              sheetName={currentTab?.sheetName}
-              showSearch={showSearch}
-            />
-          </div>
+          <>
+            {isJsonTab && viewMode === "code" ? (
+              <JsonCodeViewer headers={headers} data={data} />
+            ) : (
+              <div style={{ flex: 1, overflow: "hidden" }}>
+                <VirtualizedTable
+                  data={data}
+                  headers={headers}
+                  height="100%"
+                  tableName={activeModalTab}
+                  initialColWidths={columnWidths.length ? columnWidths : null}
+                  initialRowHeights={
+                    Object.keys(rowHeights).length > 0 ? rowHeights : null
+                  }
+                  sheetName={currentTab?.sheetName}
+                  showSearch={showSearch}
+                />
+              </div>
+            )}
+          </>
         )}
 
         {/* Empty state */}
@@ -337,7 +361,7 @@ function TableModal({
     <Modal show={show} onHide={onHide} size="xl" fullscreen="lg-down" centered>
       <Modal.Header closeButton>
         <Modal.Title className="flex-grow-1">{title}</Modal.Title>
-        {type === "custom" && (
+        {type === "custom" && viewMode === "table" && (
           <button
             type="button"
             className={`btn me-2 ${showSearch ? "text-primary" : "text-dark"}`}
@@ -356,13 +380,12 @@ function TableModal({
             <i className="bi bi-search" />
           </button>
         )}
-        {type === "custom" && (
+        {type === "custom" && viewMode === "table" && (
           <button
             type="button"
             className="btn me-2"
             onClick={() => {
-              const tab = tabs.find((t) => t.key === activeModalTab);
-              if (tab) handleRefresh(tab, activeModalTab);
+              if (currentTab) handleRefresh(currentTab, activeModalTab);
             }}
             disabled={tabsState[activeModalTab]?.loading}
             title="Обновить данные (высоты строк и ширина колонок сбросятся к исходным)"
@@ -375,6 +398,35 @@ function TableModal({
           >
             <i className="bi bi-arrow-repeat text-dark" />
           </button>
+        )}
+        {/* Table / Code toggle — only for JSON tabs */}
+        {type === "custom" && isJsonTab && (
+          <div
+            className="btn-group me-2"
+            role="group"
+            aria-label="Режим отображения"
+          >
+            <button
+              type="button"
+              className={`btn btn-sm ${
+                viewMode === "table" ? "btn-primary" : "btn-outline-secondary"
+              }`}
+              onClick={() => setViewMode("table")}
+              title="Таблица"
+            >
+              <i className="bi bi-table" />
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${
+                viewMode === "code" ? "btn-primary" : "btn-outline-secondary"
+              }`}
+              onClick={() => setViewMode("code")}
+              title="JSON"
+            >
+              <i className="bi bi-code-slash" />
+            </button>
+          </div>
         )}
       </Modal.Header>
       <Modal.Body

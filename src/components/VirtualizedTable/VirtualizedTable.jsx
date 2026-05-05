@@ -331,7 +331,9 @@ function VirtualizedTable({
   const totalTableWidth = colWidths.reduce((s, w) => s + w, 0);
 
   // Scaled padding helpers — proportional to zoom level
-  const thPadding = `${Math.round(zoom * 10)}px ${Math.round(zoom * 20)}px ${Math.round(zoom * 10)}px ${Math.round(zoom * 12)}px`;
+  const thPadding = `${Math.round(zoom * 10)}px ${Math.round(
+    zoom * 20
+  )}px ${Math.round(zoom * 10)}px ${Math.round(zoom * 12)}px`;
   const tdPadding = `${Math.round(zoom * 10)}px ${Math.round(zoom * 12)}px`;
 
   return (
@@ -520,8 +522,7 @@ function VirtualizedTable({
               <tbody>
                 {visibleData.map((row, rowIndex) => {
                   const dataIndex = data.indexOf(row);
-                  const rowHeight =
-                    rowHeights[dataIndex] || DEFAULT_ROW_HEIGHT;
+                  const rowHeight = rowHeights[dataIndex] || DEFAULT_ROW_HEIGHT;
 
                   return (
                     <tr
@@ -530,9 +531,7 @@ function VirtualizedTable({
                       style={{
                         height: `${rowHeight}px`,
                       }}
-                      onMouseDown={(e) =>
-                        handleRowResizeMouseDown(e, rowIndex)
-                      }
+                      onMouseDown={(e) => handleRowResizeMouseDown(e, rowIndex)}
                     >
                       {headers.map((_, colIndex) => (
                         <td
