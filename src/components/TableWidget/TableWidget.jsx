@@ -18,6 +18,7 @@ function TableWidget({
   label = "Открыть",
   buttonVariant = "primary",
   manual = false,
+  portalContainer,
   onReady,
   ref,
 }) {
@@ -195,6 +196,7 @@ function TableWidget({
         size="xl"
         fullscreen="lg-down"
         centered
+        container={portalContainer ?? document.body}
       >
         <Modal.Header closeButton>
           <Modal.Title className="flex-grow-1">{title}</Modal.Title>
