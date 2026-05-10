@@ -11,6 +11,9 @@
  *   <!-- Any clickable element that triggers this widget -->
  *   <button class="js-open-table-widget" data-widget-id="my-widget">Открыть таблицу</button>
  *
+ *   <!-- Or without data-widget-id when only one widget exists -->
+ *   <button class="js-open-table-widget">Открыть таблицу</button>
+ *
  * The loader auto-detects the main bundle URL from its own <script src>.
  * Override via: window.TableWidgetLoaderConfig = { bundleUrl: '/path/to/table-widget.iife.js' }
  */
@@ -63,24 +66,32 @@
         document.head.appendChild(script);
     }
 
+    function openElement(el) {
+        // customElements.whenDefined resolves once the class is registered.
+        // open() itself handles the "React not ready yet" case via _pendingOpen.
+        customElements.whenDefined("table-widget").then(function() {
+            if (typeof el.open === "function") {
+                el.open();
+            }
+        });
+    }
+
     function openWidget(widgetId) {
         var el = document.getElementById(widgetId);
         if (!el) {
             console.warn("[table-widget-loader] Element not found:", widgetId);
             return;
         }
+        openElement(el);
+    }
 
-        // Wait for the custom element class to be registered, then open
-        customElements.whenDefined("table-widget").then(function() {
-            // Give React one frame to commit its first render before calling open()
-            requestAnimationFrame(function() {
-                if (typeof el.open === "function") {
-                    el.open();
-                } else {
-                    console.warn("[table-widget-loader] .open() not available on element:", widgetId);
-                }
-            });
-        });
+    function openFirstManualWidget() {
+        var el = document.querySelector('table-widget[manual="true"]');
+        if (!el) {
+            console.warn("[table-widget-loader] No manual table-widget found on page");
+            return;
+        }
+        openElement(el);
     }
 
     // Event delegation — works for elements added to DOM after this script runs
@@ -91,13 +102,12 @@
         e.preventDefault();
 
         var widgetId = trigger.getAttribute("data-widget-id");
-        if (!widgetId) {
-            console.warn("[table-widget-loader] Trigger is missing data-widget-id attribute:", trigger);
-            return;
-        }
-
         loadBundle(function() {
-            openWidget(widgetId);
+            if (widgetId) {
+                openWidget(widgetId);
+            } else {
+                openFirstManualWidget();
+            }
         });
     });
 })();
