@@ -11,7 +11,10 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: ["http://localhost:5173", "http://localhost:3000"] }));
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim())
+  : ["http://localhost:5173", "http://localhost:3000"];
+app.use(cors({ origin: allowedOrigins }));
 
 const auth = new google.auth.JWT({
   email: credentials.client_email,
