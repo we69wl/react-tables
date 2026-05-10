@@ -35,7 +35,7 @@ function TableModal({
     [tabs, activeModalTab]
   );
   const isJsonTab = !!currentTab?.jsonUrl;
-  const viewMode = viewModes[activeModalTab] ?? "table";
+  const viewMode = viewModes[activeModalTab] ?? (isJsonTab ? "code" : "table");
 
   const setViewMode = useCallback(
     (mode) => {
@@ -298,6 +298,48 @@ function TableModal({
           ))}
         </div>
 
+        {/* View toggle — only for JSON tabs, sits below the tab bar */}
+        {isJsonTab && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 12px",
+              borderBottom: "1px solid #dee2e6",
+              background: "#f8f9fa",
+              flexShrink: 0,
+            }}
+          >
+            <div className="btn-group btn-group-sm" role="group">
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  viewMode === "table"
+                    ? "btn-secondary"
+                    : "btn-outline-secondary"
+                }`}
+                onClick={() => setViewMode("table")}
+              >
+                <i className="bi bi-table me-1" />
+                Таблица
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  viewMode === "code"
+                    ? "btn-secondary"
+                    : "btn-outline-secondary"
+                }`}
+                onClick={() => setViewMode("code")}
+              >
+                <i className="bi bi-code-slash me-1" />
+                JSON
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Loading */}
         {loading && (
           <div className="d-flex justify-content-center align-items-center flex-grow-1">
@@ -398,35 +440,6 @@ function TableModal({
           >
             <i className="bi bi-arrow-repeat text-dark" />
           </button>
-        )}
-        {/* Table / Code toggle — only for JSON tabs */}
-        {type === "custom" && isJsonTab && (
-          <div
-            className="btn-group me-2"
-            role="group"
-            aria-label="Режим отображения"
-          >
-            <button
-              type="button"
-              className={`btn btn-sm ${
-                viewMode === "table" ? "btn-primary" : "btn-outline-secondary"
-              }`}
-              onClick={() => setViewMode("table")}
-              title="Таблица"
-            >
-              <i className="bi bi-table" />
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${
-                viewMode === "code" ? "btn-primary" : "btn-outline-secondary"
-              }`}
-              onClick={() => setViewMode("code")}
-              title="JSON"
-            >
-              <i className="bi bi-code-slash" />
-            </button>
-          </div>
         )}
       </Modal.Header>
       <Modal.Body

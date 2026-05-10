@@ -1,16 +1,35 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+  useImperativeHandle,
+} from "react";
 import { Modal, Button, Spinner } from "react-bootstrap";
 import VirtualizedTable from "../VirtualizedTable/VirtualizedTable";
 import JsonCodeViewer from "../JsonCodeViewer/JsonCodeViewer";
 
+// React 19: ref is a regular prop, no forwardRef needed
 function TableWidget({
   tabs = [],
   apiBase = "/api",
   title = "Таблица",
   label = "Открыть",
   buttonVariant = "primary",
+  manual = false,
+  onReady,
+  ref,
 }) {
   const [show, setShow] = useState(false);
+
+  // Expose open() so the web component can trigger the modal externally (manual mode)
+  useImperativeHandle(ref, () => ({ open: () => setShow(true) }), []);
+
+  // Notify the web component that React has committed the first render
+  useEffect(() => {
+    onReady?.();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [activeTab, setActiveTab] = useState(tabs[0]?.key ?? "");
   const [tabsState, setTabsState] = useState({});
   const [showSearch, setShowSearch] = useState(false);
@@ -22,7 +41,7 @@ function TableWidget({
     [tabs, activeTab]
   );
   const isJsonTab = !!currentTab?.jsonUrl;
-  const viewMode = viewModes[activeTab] ?? "table";
+  const viewMode = viewModes[activeTab] ?? (isJsonTab ? "code" : "table");
 
   const setViewMode = useCallback(
     (mode) => setViewModes((prev) => ({ ...prev, [activeTab]: mode })),
@@ -164,9 +183,11 @@ function TableWidget({
 
   return (
     <>
-      <Button variant={buttonVariant} onClick={() => setShow(true)}>
-        {label}
-      </Button>
+      {!manual && (
+        <Button variant={buttonVariant} onClick={() => setShow(true)}>
+          {label}
+        </Button>
+      )}
 
       <Modal
         show={show}
@@ -181,11 +202,17 @@ function TableWidget({
           {viewMode === "table" && (
             <button
               type="button"
-              className={`btn me-2 ${showSearch ? "text-primary" : "text-dark"}`}
+              className={`btn me-2 ${
+                showSearch ? "text-primary" : "text-dark"
+              }`}
               onClick={() => setShowSearch((v) => !v)}
               disabled={loading}
               title="Поиск"
-              style={{ outline: "none", border: "none", opacity: loading ? 0.5 : 1 }}
+              style={{
+                outline: "none",
+                border: "none",
+                opacity: loading ? 0.5 : 1,
+              }}
             >
               <i className="bi bi-search" />
             </button>
@@ -198,35 +225,14 @@ function TableWidget({
               onClick={() => currentTab && handleRefresh(currentTab)}
               disabled={loading}
               title="Обновить данные"
-              style={{ outline: "none", border: "none", opacity: loading ? 0.5 : 1 }}
+              style={{
+                outline: "none",
+                border: "none",
+                opacity: loading ? 0.5 : 1,
+              }}
             >
               <i className="bi bi-arrow-repeat text-dark" />
             </button>
-          )}
-
-          {isJsonTab && (
-            <div className="btn-group me-2" role="group">
-              <button
-                type="button"
-                className={`btn btn-sm ${
-                  viewMode === "table" ? "btn-primary" : "btn-outline-secondary"
-                }`}
-                onClick={() => setViewMode("table")}
-                title="Таблица"
-              >
-                <i className="bi bi-table" />
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${
-                  viewMode === "code" ? "btn-primary" : "btn-outline-secondary"
-                }`}
-                onClick={() => setViewMode("code")}
-                title="JSON"
-              >
-                <i className="bi bi-code-slash" />
-              </button>
-            </div>
           )}
         </Modal.Header>
 
@@ -272,6 +278,48 @@ function TableWidget({
                   {tab.label}
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* View toggle — only for JSON tabs, sits below the tab bar */}
+          {isJsonTab && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "6px 12px",
+                borderBottom: "1px solid #dee2e6",
+                background: "#f8f9fa",
+                flexShrink: 0,
+              }}
+            >
+              <div className="btn-group btn-group-sm" role="group">
+                <button
+                  type="button"
+                  className={`btn btn-sm ${
+                    viewMode === "table"
+                      ? "btn-secondary"
+                      : "btn-outline-secondary"
+                  }`}
+                  onClick={() => setViewMode("table")}
+                >
+                  <i className="bi bi-table me-1" />
+                  Таблица
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${
+                    viewMode === "code"
+                      ? "btn-secondary"
+                      : "btn-outline-secondary"
+                  }`}
+                  onClick={() => setViewMode("code")}
+                >
+                  <i className="bi bi-code-slash me-1" />
+                  JSON
+                </button>
+              </div>
             </div>
           )}
 

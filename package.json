@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "server": "node server/index.js",
     "dev:all": "concurrently \"npm run dev\" \"npm run server\"",
-    "build:wc": "vite build --config vite.config.wc.js"
+    "build:wc": "vite build --config vite.config.wc.js && vite build --config vite.config.loader.js"
   },
   "dependencies": {
     "bootstrap": "^5.3.8",
