@@ -2,10 +2,11 @@ import os
 import json
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from google.oauth2 import service_account
+import httplib2
+import google_auth_httplib2
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import requests as req_lib
@@ -32,26 +33,65 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Google Sheets service — singleton, thread-safe ────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")
+API_TIMEOUT = int(os.getenv("API_TIMEOUT", "60"))
 
-_sheets_service = None
-_service_lock = threading.Lock()
+# Row heights are fetched only for the first N rows per page.
+# Fetching rowMetadata for all limit rows on a 20k+ row sheet causes 504 timeouts
+# because the response payload is huge. 50 rows is enough for the initial viewport.
+ROW_META_ROWS = int(os.getenv("ROW_META_ROWS", "50"))
 
 
-def get_sheets_service():
-    global _sheets_service
-    if _sheets_service is None:
-        with _service_lock:
-            if _sheets_service is None:
-                creds = service_account.Credentials.from_service_account_file(
-                    CREDENTIALS_FILE, scopes=SCOPES
+# ── Google Sheets service — new per request, no singleton ────────────────────
+#
+# A shared singleton reuses the same httplib2 keep-alive connection across
+# requests. On repeated calls (different spreadsheetIds), the stale SSL session
+# causes "WRONG_VERSION_NUMBER" errors and occasional segmentation faults.
+# Creating a fresh AuthorizedHttp per request avoids all of that.
+
+def build_service():
+    creds = service_account.Credentials.from_service_account_file(
+        CREDENTIALS_FILE, scopes=SCOPES
+    )
+    http = google_auth_httplib2.AuthorizedHttp(
+        creds,
+        http=httplib2.Http(timeout=API_TIMEOUT),
+    )
+    # cache_discovery=False — skip writing/reading the local discovery cache file,
+    # which is not needed when service objects are short-lived.
+    return build("sheets", "v4", http=http, cache_discovery=False)
+
+
+# ── Retry helper ──────────────────────────────────────────────────────────────
+
+_RETRYABLE = ("SSL", "WRONG_VERSION", "Connection", "Broken", "RemoteDisconnected", "reset")
+
+
+def _with_retry(fn, max_retries=3):
+    """Call fn(), retrying on transient network/SSL errors.
+
+    fn() must be self-contained: it calls build_service() internally so that
+    each retry opens a completely fresh TCP+SSL connection.
+    """
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            err = str(e)
+            if any(s in err for s in _RETRYABLE) and attempt < max_retries - 1:
+                logger.warning(
+                    f"Retryable error (attempt {attempt + 1}/{max_retries}, "
+                    f"{type(e).__name__}): {e} — retrying in {0.3 * (attempt + 1):.1f}s"
                 )
-                _sheets_service = build("sheets", "v4", credentials=creds)
-                logger.info("Google Sheets service initialized")
-    return _sheets_service
+                last_exc = e
+                time.sleep(0.3 * (attempt + 1))
+                continue
+            raise
+    raise last_exc  # unreachable but satisfies type checkers
 
 
 # ── In-memory cache — 1 hour TTL, max 500 entries ────────────────────────────
@@ -97,8 +137,8 @@ def health():
 # offset — number of data rows to skip (0 = first page)
 # limit  — rows per page (max 1000)
 # Returns: { headers, data, columnWidths, rowHeights, total }
-#   offset=0  → columnWidths and rowHeights populated from sheet metadata
-#   offset>0  → columnWidths=[], rowHeights={} (use cached from first page)
+#   offset=0  → columnWidths populated; rowHeights for first ROW_META_ROWS rows
+#   offset>0  → columnWidths=[]; rowHeights for first ROW_META_ROWS rows of the page
 @app.get("/api/sheet-data")
 def get_sheet_data(
     spreadsheetId: str = Query(...),
@@ -117,129 +157,20 @@ def get_sheet_data(
         logger.info(f"Cache hit: {page_key}")
         return cached
 
+    t_start = time.perf_counter()
+
     try:
-        service = get_sheets_service()
-
         if offset == 0:
-            # First page: headers (!1:1), first-page data (!2:limit+1), metadata — all parallel
-            def fetch_headers():
-                return (
-                    service.spreadsheets()
-                    .values()
-                    .get(spreadsheetId=spreadsheetId, range=f"'{sheetName}'!1:1")
-                    .execute()
-                )
-
-            def fetch_data():
-                return (
-                    service.spreadsheets()
-                    .values()
-                    .get(spreadsheetId=spreadsheetId, range=f"'{sheetName}'!2:{limit + 1}")
-                    .execute()
-                )
-
-            def fetch_meta():
-                return (
-                    service.spreadsheets()
-                    .get(
-                        spreadsheetId=spreadsheetId,
-                        fields="sheets(properties(title,gridProperties(rowCount)),data(columnMetadata(pixelSize),rowMetadata(pixelSize)))",
-                    )
-                    .execute()
-                )
-
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                f_headers = pool.submit(fetch_headers)
-                f_data = pool.submit(fetch_data)
-                f_meta = pool.submit(fetch_meta)
-                headers_res = f_headers.result()
-                data_res = f_data.result()
-                meta_res = f_meta.result()
-
-            headers = (headers_res.get("values") or [[]])[0]
-            data = data_res.get("values") or []
-
-            sheet_meta = next(
-                (
-                    s for s in meta_res.get("sheets", [])
-                    if s.get("properties", {}).get("title") == sheetName
-                ),
-                None,
-            )
-
-            grid_props = (sheet_meta or {}).get("properties", {}).get("gridProperties", {})
-            total = max(0, grid_props.get("rowCount", 1) - 1)
-
-            sheet_data_block = (sheet_meta or {}).get("data", [{}])[0]
-
-            col_meta = sheet_data_block.get("columnMetadata", [])
-            column_widths = [col.get("pixelSize", 100) for col in col_meta]
-
-            # rowMetadata[0] = header row (skip)
-            # rowMetadata[1] → rowHeights[0], rowMetadata[2] → rowHeights[1], …
-            row_meta = sheet_data_block.get("rowMetadata", [])
-            row_heights = {}
-            for idx, row in enumerate(row_meta):
-                pixel_size = row.get("pixelSize")
-                if pixel_size and idx >= 1 and idx - 1 < limit:
-                    row_heights[idx - 1] = pixel_size
-
-            # Self-correct total: if fewer rows came back than limit, we have everything
-            if len(data) < limit:
-                total = len(data)
-
-            set_cached(meta_key, {
-                "headers": headers,
-                "columnWidths": column_widths,
-                "rowHeights": row_heights,
-                "total": total,
-            })
-
-            result = {
-                "headers": headers,
-                "data": data,
-                "columnWidths": column_widths,
-                "rowHeights": row_heights,
-                "total": total,
-            }
-            set_cached(page_key, result)
-            logger.info(f"Fresh data (p0): {sheetName}, rows: {len(data)}, total: {total}")
-            return result
-
+            result = _fetch_first_page(spreadsheetId, sheetName, limit, meta_key)
         else:
-            # Subsequent pages: fetch only the requested range
-            # Row 1 = header, data starts at row 2. offset=200 → rows 202..401
-            start_row = offset + 2
-            end_row = offset + limit + 1
+            result = _fetch_page(spreadsheetId, sheetName, offset, limit, meta_key)
 
-            values_res = (
-                service.spreadsheets()
-                .values()
-                .get(spreadsheetId=spreadsheetId, range=f"'{sheetName}'!{start_row}:{end_row}")
-                .execute()
-            )
-            data = values_res.get("values") or []
-
-            cached_meta = get_cached(meta_key)
-            headers = (cached_meta or {}).get("headers", [])
-            total = (cached_meta or {}).get("total")
-
-            # Refine total when last page comes back shorter than limit
-            if len(data) < limit:
-                total = offset + len(data)
-                if cached_meta:
-                    set_cached(meta_key, {**cached_meta, "total": total})
-
-            result = {
-                "headers": headers,
-                "data": data,
-                "columnWidths": [],
-                "rowHeights": {},
-                "total": total,
-            }
-            set_cached(page_key, result)
-            logger.info(f"Fresh data (p{offset}): {sheetName}, rows: {len(data)}, total: {total}")
-            return result
+        set_cached(page_key, result)
+        logger.info(
+            f"Fresh p{offset}: {sheetName} rows={len(result['data'])} "
+            f"total={result['total']} in {(time.perf_counter() - t_start) * 1000:.0f}ms"
+        )
+        return result
 
     except HttpError as e:
         status = int(e.resp.status)
@@ -251,6 +182,159 @@ def get_sheet_data(
     except Exception as e:
         logger.error(f"[sheet-data] {e}")
         raise HTTPException(status_code=500, detail=str(e) or "Failed to load sheet")
+
+
+def _fetch_first_page(spreadsheetId: str, sheetName: str, limit: int, meta_key: str) -> dict:
+    # Request 1 — batchGet: headers row + data rows in one HTTP call
+    def do_batch():
+        svc = build_service()
+        t0 = time.perf_counter()
+        res = svc.spreadsheets().values().batchGet(
+            spreadsheetId=spreadsheetId,
+            ranges=[
+                f"'{sheetName}'!1:1",
+                f"'{sheetName}'!2:{limit + 1}",
+            ],
+            valueRenderOption="UNFORMATTED_VALUE",  # Только значения, без формул
+            dateTimeRenderOption="FORMATTED_STRING",
+        ).execute()
+        logger.info(f"  batchGet: {(time.perf_counter() - t0) * 1000:.0f}ms")
+        return res
+
+    values_res = _with_retry(do_batch)
+    value_ranges = values_res.get("valueRanges", [])
+    headers = (value_ranges[0].get("values") or [[]])[0] if value_ranges else []
+    data = value_ranges[1].get("values") or [] if len(value_ranges) > 1 else []
+
+    # Request 2 — spreadsheets.get: gridProps + columnMeta + rowMeta
+    # ranges= limits rowMetadata to the first ROW_META_ROWS data rows + header only.
+    # Without ranges=, Google returns rowMetadata for ALL rows in the sheet —
+    # on 20k+ row sheets that is megabytes of JSON and causes 504 timeouts.
+    meta_range = f"'{sheetName}'!1:{ROW_META_ROWS + 1}"
+
+    def do_meta():
+        svc = build_service()
+        t0 = time.perf_counter()
+        res = svc.spreadsheets().get(
+            spreadsheetId=spreadsheetId,
+            ranges=[meta_range],
+            fields=(
+                "sheets(properties(title,gridProperties(rowCount)),"
+                "data(startRow,columnMetadata(pixelSize),rowMetadata(pixelSize)))"
+            ),
+        ).execute()
+        logger.info(f"  spreadsheets.get: {(time.perf_counter() - t0) * 1000:.0f}ms")
+        return res
+
+    meta_res = _with_retry(do_meta)
+
+    sheet_meta = next(
+        (s for s in meta_res.get("sheets", [])
+         if s.get("properties", {}).get("title") == sheetName),
+        None,
+    )
+
+    grid_props = (sheet_meta or {}).get("properties", {}).get("gridProperties", {})
+    total = max(0, grid_props.get("rowCount", 1) - 1)
+
+    data_block = (sheet_meta or {}).get("data", [{}])[0]
+    block_start = data_block.get("startRow", 0)  # 0-indexed; always 0 for first page
+
+    col_meta = data_block.get("columnMetadata", [])
+    column_widths = [col.get("pixelSize", 100) for col in col_meta]
+
+    # block_start=0: idx=0 → header (data_idx=-1, skipped); idx=1 → data[0]
+    row_heights = {}
+    for idx, row in enumerate(data_block.get("rowMetadata", [])):
+        pixel_size = row.get("pixelSize")
+        if pixel_size:
+            data_idx = block_start + idx - 1
+            if 0 <= data_idx < limit:
+                row_heights[data_idx] = pixel_size
+
+    if len(data) < limit:
+        total = len(data)
+
+    set_cached(meta_key, {
+        "headers": headers,
+        "columnWidths": column_widths,
+        "rowHeights": row_heights,
+        "total": total,
+    })
+
+    return {
+        "headers": headers,
+        "data": data,
+        "columnWidths": column_widths,
+        "rowHeights": row_heights,
+        "total": total,
+    }
+
+
+def _fetch_page(
+    spreadsheetId: str, sheetName: str, offset: int, limit: int, meta_key: str
+) -> dict:
+    row_start = offset + 2                                    # 1-indexed sheet row
+    row_end = offset + limit + 1                              # 1-indexed sheet row
+    row_meta_end = min(row_end, row_start + ROW_META_ROWS - 1)  # cap at ROW_META_ROWS
+
+    # Request 1 — page data
+    def do_values():
+        svc = build_service()
+        t0 = time.perf_counter()
+        res = svc.spreadsheets().values().get(
+            spreadsheetId=spreadsheetId,
+            range=f"'{sheetName}'!{row_start}:{row_end}",
+        ).execute()
+        logger.info(f"  values.get: {(time.perf_counter() - t0) * 1000:.0f}ms")
+        return res
+
+    values_res = _with_retry(do_values)
+    data = values_res.get("values") or []
+
+    # Request 2 — row heights for first ROW_META_ROWS rows of this page only
+    def do_row_meta():
+        svc = build_service()
+        t0 = time.perf_counter()
+        res = svc.spreadsheets().get(
+            spreadsheetId=spreadsheetId,
+            ranges=[f"'{sheetName}'!{row_start}:{row_meta_end}"],
+            fields="sheets(data(startRow,rowMetadata(pixelSize)))",
+        ).execute()
+        logger.info(f"  row-meta: {(time.perf_counter() - t0) * 1000:.0f}ms")
+        return res
+
+    row_meta_res = _with_retry(do_row_meta)
+
+    # block_start (0-indexed): offset=200 → row_start=202 (1-idx) → startRow=201 (0-idx)
+    # data_idx = block_start + idx - 1  →  201 + 0 - 1 = 200 = offset ✓
+    row_heights = {}
+    sheets_list = row_meta_res.get("sheets", [])
+    if sheets_list:
+        data_block = (sheets_list[0].get("data") or [{}])[0]
+        block_start = data_block.get("startRow", offset + 1)
+        for idx, row in enumerate(data_block.get("rowMetadata", [])):
+            pixel_size = row.get("pixelSize")
+            if pixel_size:
+                data_idx = block_start + idx - 1
+                row_heights[data_idx] = pixel_size
+
+    cached_meta = get_cached(meta_key)
+    headers = (cached_meta or {}).get("headers", [])
+    total = (cached_meta or {}).get("total")
+
+    if len(data) < limit:
+        total = offset + len(data)
+        if cached_meta:
+            set_cached(meta_key, {**cached_meta, "total": total})
+
+    return {
+        "headers": headers,
+        "data": data,
+        "columnWidths": [],
+        "rowHeights": row_heights,
+        "total": total,
+    }
 
 
 # GET /api/json-data?url=...

@@ -548,6 +548,21 @@ function VirtualizedTable({
           </div>
         )}
 
+        {/* Disclaimer */}
+        <div
+          style={{
+            padding: "6px 12px",
+            background: "#fff5f5",
+            borderBottom: "1px solid #f5c6cb",
+            flexShrink: 0,
+            fontSize: "0.78rem",
+            color: "#c0392b",
+            textAlign: "center",
+          }}
+        >
+          Данный файл является лишь демонстрационным вариантом. Часть данных может быть урезана для сохранения конфиденциальности Заказчика.
+        </div>
+
         {/* Empty state */}
         {totalFiltered === 0 ? (
           <div className="flex-grow-1 d-flex flex-column justify-content-center align-items-center text-muted bg-light">
