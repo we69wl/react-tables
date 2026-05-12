@@ -9,6 +9,116 @@ const MIN_ROW_HEIGHT = 30;
 const MAX_ROW_HEIGHT = 300;
 const DEFAULT_ROW_HEIGHT = 36;
 
+// ── Skeleton ──────────────────────────────────────────────────────────────────
+
+const SKELETON_STYLES = `
+  @keyframes tw-shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position:  200% 0; }
+  }
+  .tw-skel {
+    background: linear-gradient(90deg, #e8e8e8 25%, #f4f4f4 50%, #e8e8e8 75%);
+    background-size: 200% 100%;
+    animation: tw-shimmer 1.4s ease-in-out infinite;
+    border-radius: 4px;
+  }
+`;
+
+const SKEL_ROWS = [
+  [72, 48, 85, 60, 38],
+  [55, 80, 42, 90, 65],
+  [88, 35, 70, 52, 78],
+  [45, 75, 60, 38, 92],
+  [78, 55, 82, 48, 65],
+  [60, 88, 35, 75, 50],
+  [85, 42, 68, 90, 45],
+  [38, 70, 78, 55, 80],
+  [92, 58, 45, 72, 35],
+  [50, 65, 88, 40, 70],
+  [68, 42, 75, 85, 52],
+  [35, 90, 55, 65, 80],
+  [80, 52, 38, 78, 60],
+  [62, 72, 90, 45, 42],
+  [48, 38, 65, 82, 70],
+  [75, 85, 50, 35, 88],
+  [40, 68, 72, 92, 55],
+  [88, 45, 58, 70, 38],
+  [58, 78, 35, 55, 82],
+  [70, 35, 92, 48, 65],
+  [42, 92, 68, 75, 50],
+  [82, 60, 45, 38, 72],
+  [65, 50, 80, 58, 45],
+  [35, 72, 55, 88, 62],
+  [90, 40, 78, 42, 75],
+];
+
+function TableSkeleton({ height, showSearch }) {
+  return (
+    <>
+      <style>{SKELETON_STYLES}</style>
+      <div
+        className="w-100 h-100 d-flex flex-column border rounded shadow-sm overflow-hidden"
+        style={{ height }}
+      >
+        {showSearch && (
+          <div className="p-3 bg-light border-bottom flex-shrink-0">
+            <div className="tw-skel" style={{ height: 38, borderRadius: 6 }} />
+          </div>
+        )}
+        <div className="flex-grow-1 overflow-hidden">
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <thead>
+              <tr>
+                {[72, 48, 85, 60, 38].map((w, i) => (
+                  <th
+                    key={i}
+                    style={{
+                      padding: "12px 16px",
+                      borderBottom: "2px solid #dee2e6",
+                      background: "white",
+                      position: "sticky",
+                      top: 0,
+                      zIndex: 10,
+                    }}
+                  >
+                    <div className="tw-skel" style={{ height: 14, width: `${w}%` }} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {SKEL_ROWS.map((cols, rowIdx) => (
+                <tr
+                  key={rowIdx}
+                  style={{ backgroundColor: rowIdx % 2 ? "#f8f9fa" : "transparent" }}
+                >
+                  {cols.map((w, colIdx) => (
+                    <td
+                      key={colIdx}
+                      style={{ padding: "10px 16px", borderBottom: "1px solid #f0f0f0" }}
+                    >
+                      <div
+                        className="tw-skel"
+                        style={{
+                          height: 13,
+                          width: `${w}%`,
+                          animationDelay: `${((rowIdx + colIdx * 2) % 6) * 0.07}s`,
+                        }}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── Row resize styles ─────────────────────────────────────────────────────────
+
 // CSS styles for row resize handle (using ::after pseudo-element)
 const ROW_RESIZE_STYLES = `
   .resizable-row {
@@ -35,11 +145,14 @@ function VirtualizedTable({
   tableName = "default", // used as localStorage key namespace
   initialColWidths = null, // server-provided widths (Google Sheets pixel sizes); overridden by localStorage
   initialRowHeights = null, // server-provided heights (Google Sheets pixel sizes); overridden by localStorage
-  sheetName = null, // displayed in the footer, e.g. "Ozon"
+  sheetName = null,  // displayed in the footer, e.g. "Ozon"
   showSearch = true, // set false to hide the search input (e.g. when modal has its own controls)
+  loading = false,
+  total = null,      // total rows on server; null = all data already loaded
+  onLoadMore = null, // () => void — fetch next page from parent
+  loadingMore = false,
 }) {
   const inputRef = useRef(null);
-  const [showRows, setShowRows] = useState(30);
   const [inputValue, setInputValue] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const debounceRef = useRef();
@@ -190,7 +303,6 @@ function VirtualizedTable({
       setSortCol(colIndex);
       setSortDir("asc");
     }
-    setShowRows(30);
   };
 
   // ── Search (existing logic, unchanged) ───────────────────────────────────
@@ -200,7 +312,6 @@ function VirtualizedTable({
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setSearchTerm(value);
-      setShowRows(30);
     }, 350);
   };
 
@@ -233,7 +344,7 @@ function VirtualizedTable({
   }, [filtered, sortCol, sortDir]);
 
   const totalFiltered = sortedData.length;
-  const visibleData = sortedData.slice(0, showRows);
+  const visibleData = sortedData;
 
   // ── Row resize via drag ───────────────────────────────────────────────────
   const handleRowResizeMouseDown = useCallback(
@@ -314,6 +425,10 @@ function VirtualizedTable({
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  if (loading && headers.length === 0) {
+    return <TableSkeleton height={height} showSearch={showSearch} />;
+  }
 
   if (headers.length === 0) {
     return (
@@ -578,29 +693,33 @@ function VirtualizedTable({
           </div>
         )}
 
-        {/* Footer: sheet name (left) + row count / Show More (right) */}
-        {(showRows < totalFiltered || sheetName) && (
+        {/* Footer: sheet name + server-side pagination status */}
+        {(sheetName || total !== null || loadingMore) && (
           <div className="px-3 py-2 bg-light border-top flex-shrink-0">
             <div className="d-flex justify-content-between align-items-center">
               <small className="text-muted">
                 {sheetName ? `Лист: ${sheetName}` : ""}
               </small>
-              {showRows < totalFiltered && (
-                <div className="d-flex align-items-center gap-3">
+              <div className="d-flex align-items-center gap-3">
+                {total !== null && (
                   <small className="text-muted">
-                    Показаны {showRows.toLocaleString()} из{" "}
-                    {totalFiltered.toLocaleString()}
+                    {searchTerm
+                      ? `Найдено ${totalFiltered.toLocaleString()}`
+                      : `Загружено ${data.length.toLocaleString()} из ${total.toLocaleString()}`}
                   </small>
+                )}
+                {!searchTerm && total !== null && data.length < total && !loadingMore && (
                   <button
                     className="btn btn-primary btn-sm px-4 fw-semibold shadow-sm"
-                    onClick={() =>
-                      setShowRows((prev) => Math.min(prev + 100, totalFiltered))
-                    }
+                    onClick={onLoadMore}
                   >
-                    +{Math.min(100, totalFiltered - showRows).toLocaleString()}
+                    Загрузить ещё
                   </button>
-                </div>
-              )}
+                )}
+                {loadingMore && (
+                  <Spinner animation="border" size="sm" variant="primary" />
+                )}
+              </div>
             </div>
           </div>
         )}

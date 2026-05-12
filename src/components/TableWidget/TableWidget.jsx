@@ -6,7 +6,9 @@ import {
   useMemo,
   useImperativeHandle,
 } from "react";
-import { Modal, Button, Spinner } from "react-bootstrap";
+import { Modal, Button } from "react-bootstrap";
+
+const LIMIT = 200;
 import VirtualizedTable from "../VirtualizedTable/VirtualizedTable";
 import JsonCodeViewer from "../JsonCodeViewer/JsonCodeViewer";
 
@@ -58,9 +60,18 @@ function TableWidget({
         data: [],
         columnWidths: [],
         rowHeights: {},
+        total: null,
         loading: true,
+        loadingMore: false,
         error: null,
       },
+    }));
+  }, []);
+
+  const setTabLoadingMore = useCallback((key) => {
+    setTabsState((prev) => ({
+      ...prev,
+      [key]: { ...(prev[key] ?? {}), loadingMore: true },
     }));
   }, []);
 
@@ -72,46 +83,70 @@ function TableWidget({
         data: json.data ?? [],
         columnWidths: json.columnWidths ?? [],
         rowHeights: json.rowHeights ?? {},
+        total: json.total ?? null,
         loading: false,
+        loadingMore: false,
         error: null,
       },
     }));
   }, []);
 
-  const setTabError = useCallback((key, message) => {
+  const setTabAppendResult = useCallback((key, json) => {
+    setTabsState((prev) => {
+      const existing = prev[key] ?? {};
+      return {
+        ...prev,
+        [key]: {
+          ...existing,
+          data: [...(existing.data ?? []), ...(json.data ?? [])],
+          total: json.total ?? existing.total ?? null,
+          loading: false,
+          loadingMore: false,
+          error: null,
+        },
+      };
+    });
+  }, []);
+
+  const setTabError = useCallback((key, message, append = false) => {
     setTabsState((prev) => ({
       ...prev,
-      [key]: {
-        headers: [],
-        data: [],
-        columnWidths: [],
-        rowHeights: {},
-        loading: false,
-        error: message,
-      },
+      [key]: append
+        ? { ...(prev[key] ?? {}), loading: false, loadingMore: false, error: message }
+        : {
+            headers: [],
+            data: [],
+            columnWidths: [],
+            rowHeights: {},
+            total: null,
+            loading: false,
+            loadingMore: false,
+            error: message,
+          },
     }));
   }, []);
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchSheetData = useCallback(
-    async (key, spreadsheetId, sheetName) => {
-      setTabLoading(key);
+    async (key, spreadsheetId, sheetName, offset = 0) => {
+      if (offset === 0) setTabLoading(key);
+      else setTabLoadingMore(key);
       try {
         const res = await fetch(
-          `${apiBase}/sheet-data?spreadsheetId=${encodeURIComponent(
-            spreadsheetId
-          )}&sheetName=${encodeURIComponent(sheetName)}`
+          `${apiBase}/sheet-data?spreadsheetId=${encodeURIComponent(spreadsheetId)}&sheetName=${encodeURIComponent(sheetName)}&offset=${offset}&limit=${LIMIT}`
         );
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           throw new Error(body.error || `HTTP ${res.status}`);
         }
-        setTabResult(key, await res.json());
+        const json = await res.json();
+        if (offset === 0) setTabResult(key, json);
+        else setTabAppendResult(key, json);
       } catch (e) {
-        setTabError(key, e.message);
+        setTabError(key, e.message, offset > 0);
       }
     },
-    [apiBase, setTabLoading, setTabResult, setTabError]
+    [apiBase, setTabLoading, setTabLoadingMore, setTabResult, setTabAppendResult, setTabError]
   );
 
   const fetchJsonData = useCallback(
@@ -173,12 +208,20 @@ function TableWidget({
     [fetchTab]
   );
 
+  const handleLoadMore = useCallback(() => {
+    if (!currentTab || currentTab.jsonUrl) return;
+    const currentData = tabsState[currentTab.key]?.data ?? [];
+    fetchSheetData(currentTab.key, currentTab.spreadsheetId, currentTab.sheetName, currentData.length);
+  }, [currentTab, tabsState, fetchSheetData]);
+
   const {
     headers = [],
     data = [],
     columnWidths = [],
     rowHeights = {},
+    total = null,
     loading = false,
+    loadingMore = false,
     error = null,
   } = tabsState[activeTab] ?? {};
 
@@ -325,14 +368,7 @@ function TableWidget({
             </div>
           )}
 
-          {loading && (
-            <div className="d-flex justify-content-center align-items-center flex-grow-1">
-              <Spinner animation="border" variant="primary" />
-              <span className="ms-2">Загрузка данных...</span>
-            </div>
-          )}
-
-          {!loading && error && (
+          {error && (
             <div className="d-flex flex-column justify-content-center align-items-center flex-grow-1 gap-3 text-danger">
               <div>
                 <strong>Ошибка:</strong> {error}
@@ -346,7 +382,7 @@ function TableWidget({
             </div>
           )}
 
-          {!loading && !error && headers.length > 0 && (
+          {!error && (loading || headers.length > 0) && (
             <>
               {isJsonTab && viewMode === "code" ? (
                 <JsonCodeViewer headers={headers} data={data} />
@@ -363,6 +399,10 @@ function TableWidget({
                     }
                     sheetName={currentTab?.sheetName}
                     showSearch={showSearch}
+                    loading={loading}
+                    total={total}
+                    onLoadMore={handleLoadMore}
+                    loadingMore={loadingMore}
                   />
                 </div>
               )}

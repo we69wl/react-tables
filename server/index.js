@@ -23,9 +23,10 @@ const auth = new google.auth.JWT({
 });
 const sheets = google.sheets({ version: "v4", auth });
 
-// ── In-memory cache — 1 hour TTL ─────────────────────────────────────────────
+// ── In-memory cache — 1 hour TTL, max 500 entries ────────────────────────────
 const CACHE_TTL = 60 * 60 * 1000;
-const cache = new Map(); // key: "spreadsheetId::sheetName" → { data, ts }
+const MAX_CACHE_SIZE = 500;
+const cache = new Map();
 
 function getCached(key) {
   const entry = cache.get(key);
@@ -38,16 +39,30 @@ function getCached(key) {
 }
 
 function setCached(key, data) {
+  if (cache.size >= MAX_CACHE_SIZE) {
+    let oldestKey, oldestTs = Infinity;
+    for (const [k, v] of cache) {
+      if (v.ts < oldestTs) { oldestTs = v.ts; oldestKey = k; }
+    }
+    cache.delete(oldestKey);
+  }
   cache.set(key, { data, ts: Date.now() });
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 app.get("/", (_req, res) => res.send("Server is working"));
 
-// GET /api/sheet-data?spreadsheetId=...&sheetName=...
+// GET /api/sheet-data?spreadsheetId=...&sheetName=...&offset=0&limit=200
+// offset — number of data rows to skip (0 = first page)
+// limit  — rows per page (max 1000)
+// Returns: { headers, data, columnWidths, rowHeights, total }
+//   offset=0  → columnWidths and rowHeights populated from sheet metadata
+//   offset>0  → columnWidths=[], rowHeights={} (use cached from first page)
 app.get("/api/sheet-data", async (req, res) => {
   const spreadsheetId = req.query.spreadsheetId?.trim();
   const sheetName = req.query.sheetName?.trim();
+  const offset = Math.max(0, parseInt(req.query.offset ?? "0", 10) || 0);
+  const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit ?? "200", 10) || 200));
 
   if (!spreadsheetId) {
     return res.status(400).json({ error: "Missing required query param: spreadsheetId" });
@@ -56,54 +71,88 @@ app.get("/api/sheet-data", async (req, res) => {
     return res.status(400).json({ error: "Missing required query param: sheetName" });
   }
 
-  const cacheKey = `${spreadsheetId}::${sheetName}`;
-  const cached = getCached(cacheKey);
-  if (cached) {
-    return res.json(cached);
-  }
+  const pageKey = `${spreadsheetId}::${sheetName}::${offset}:${limit}`;
+  const metaKey = `${spreadsheetId}::${sheetName}::meta`;
+
+  const cachedPage = getCached(pageKey);
+  if (cachedPage) return res.json(cachedPage);
 
   try {
-    // Fetch cell values and column metadata in parallel
-    const [valuesRes, metaRes] = await Promise.all([
-      sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `'${sheetName}'`,
-      }),
-      sheets.spreadsheets.get({
-        spreadsheetId,
-        fields: "sheets(properties(title),data(columnMetadata(pixelSize),rowMetadata(pixelSize)))",
-      }),
-    ]);
+    if (offset === 0) {
+      // First page: headers, first-page data, and sheet metadata — all in parallel
+      const [headersRes, dataRes, metaRes] = await Promise.all([
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `'${sheetName}'!1:1`,
+        }),
+        sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `'${sheetName}'!2:${limit + 1}`,
+        }),
+        sheets.spreadsheets.get({
+          spreadsheetId,
+          fields: "sheets(properties(title,gridProperties(rowCount)),data(columnMetadata(pixelSize),rowMetadata(pixelSize)))",
+        }),
+      ]);
 
-    const sheetMeta = metaRes.data.sheets?.find(
-      (s) => s.properties?.title === sheetName
-    );
-    const colMeta = sheetMeta?.data?.[0]?.columnMetadata ?? [];
-    const columnWidths = colMeta.map((col) => col.pixelSize || 100);
+      const headers = headersRes.data.values?.[0] ?? [];
+      const data = dataRes.data.values ?? [];
 
-    // Extract row heights from Google Sheets metadata
-    // Note: rowMetadata includes headers (row 0), but data array excludes them
-    // So we need to skip index 0 and shift indices: rowHeights[0] = rowMeta[1].pixelSize
-    const rowMeta = sheetMeta?.data?.[0]?.rowMetadata ?? [];
-    const rowHeights = {}; // { dataIndex: heightInPixels }
-    rowMeta.forEach((row, idx) => {
-      // Skip header row (idx 0), start from data rows (idx >= 1)
-      // Map to data indices: rowMeta[1] → rowHeights[0], rowMeta[2] → rowHeights[1], etc.
-      if (row.pixelSize && idx >= 1) {
-        rowHeights[idx - 1] = row.pixelSize;
+      const sheetMeta = metaRes.data.sheets?.find(
+        (s) => s.properties?.title === sheetName
+      );
+      const gridProps = sheetMeta?.properties?.gridProperties ?? {};
+      let total = Math.max(0, (gridProps.rowCount ?? 1) - 1);
+
+      const colMeta = sheetMeta?.data?.[0]?.columnMetadata ?? [];
+      const columnWidths = colMeta.map((col) => col.pixelSize || 100);
+
+      const rowMeta = sheetMeta?.data?.[0]?.rowMetadata ?? [];
+      const rowHeights = {};
+      rowMeta.forEach((row, idx) => {
+        if (row.pixelSize && idx >= 1 && idx - 1 < limit) {
+          rowHeights[idx - 1] = row.pixelSize;
+        }
+      });
+
+      // Self-correct total: if fewer rows came back than limit, we have everything
+      if (data.length < limit) total = data.length;
+
+      setCached(metaKey, { headers, columnWidths, rowHeights, total });
+
+      const result = { headers, data, columnWidths, rowHeights, total };
+      setCached(pageKey, result);
+      return res.json(result);
+
+    } else {
+      // Subsequent pages: fetch only the requested range
+      // Row 1 = header, data starts at row 2. offset=200 → rows 202..401
+      const startRow = offset + 2;
+      const endRow = offset + limit + 1;
+
+      const valuesRes = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `'${sheetName}'!${startRow}:${endRow}`,
+      });
+
+      const data = valuesRes.data.values ?? [];
+
+      const cachedMeta = getCached(metaKey);
+      const headers = cachedMeta?.headers ?? [];
+      let total = cachedMeta?.total ?? null;
+
+      // Refine total when last page comes back shorter than limit
+      if (data.length < limit) {
+        total = offset + data.length;
+        if (cachedMeta) setCached(metaKey, { ...cachedMeta, total });
       }
-    });
 
-    const rows = valuesRes.data.values ?? [];
-    const headers = rows[0] ?? [];
-    const data = rows.slice(1);
-
-    const result = { headers, data, columnWidths, rowHeights };
-    setCached(cacheKey, result);
-    res.json(result);
+      const result = { headers, data, columnWidths: [], rowHeights: {}, total };
+      setCached(pageKey, result);
+      return res.json(result);
+    }
   } catch (err) {
     console.error("[sheet-data]", err.message);
-    // Google API returns 400 for bad sheet names
     res.status(err.code === 400 ? 400 : 500).json({ error: err.message || "Failed to load sheet" });
   }
 });
@@ -151,6 +200,14 @@ app.get("/api/json-data", async (req, res) => {
     console.error("[json-data]", err.message);
     res.status(500).json({ error: err.message || "Failed to load JSON" });
   }
+});
+
+// POST /api/cache/clear
+app.post("/api/cache/clear", (_req, res) => {
+  const count = cache.size;
+  cache.clear();
+  console.log(`Cache cleared (${count} entries)`);
+  res.json({ message: `Cache cleared (${count} entries)` });
 });
 
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

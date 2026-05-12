@@ -1,4 +1,6 @@
 import { Modal, Button, Spinner } from "react-bootstrap";
+
+const LIMIT = 200;
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import VirtualizedTable from "../VirtualizedTable/VirtualizedTable";
 import JsonCodeViewer from "../JsonCodeViewer/JsonCodeViewer";
@@ -52,9 +54,18 @@ function TableModal({
         data: [],
         columnWidths: [],
         rowHeights: {},
+        total: null,
         loading: true,
+        loadingMore: false,
         error: null,
       },
+    }));
+  }, []);
+
+  const setTabLoadingMore = useCallback((tabKey) => {
+    setTabsState((prev) => ({
+      ...prev,
+      [tabKey]: { ...(prev[tabKey] ?? {}), loadingMore: true },
     }));
   }, []);
 
@@ -66,46 +77,70 @@ function TableModal({
         data: json.data ?? [],
         columnWidths: json.columnWidths ?? [],
         rowHeights: json.rowHeights ?? {},
+        total: json.total ?? null,
         loading: false,
+        loadingMore: false,
         error: null,
       },
     }));
   }, []);
 
-  const setTabError = useCallback((tabKey, message) => {
+  const setTabAppendResult = useCallback((tabKey, json) => {
+    setTabsState((prev) => {
+      const existing = prev[tabKey] ?? {};
+      return {
+        ...prev,
+        [tabKey]: {
+          ...existing,
+          data: [...(existing.data ?? []), ...(json.data ?? [])],
+          total: json.total ?? existing.total ?? null,
+          loading: false,
+          loadingMore: false,
+          error: null,
+        },
+      };
+    });
+  }, []);
+
+  const setTabError = useCallback((tabKey, message, append = false) => {
     setTabsState((prev) => ({
       ...prev,
-      [tabKey]: {
-        headers: [],
-        data: [],
-        columnWidths: [],
-        rowHeights: {},
-        loading: false,
-        error: message,
-      },
+      [tabKey]: append
+        ? { ...(prev[tabKey] ?? {}), loading: false, loadingMore: false, error: message }
+        : {
+            headers: [],
+            data: [],
+            columnWidths: [],
+            rowHeights: {},
+            total: null,
+            loading: false,
+            loadingMore: false,
+            error: message,
+          },
     }));
   }, []);
 
   // Fetch sheet data from the Express server
   const fetchSheetData = useCallback(
-    async (tabKey, spreadsheetId, sheetName) => {
-      setTabLoading(tabKey);
+    async (tabKey, spreadsheetId, sheetName, offset = 0) => {
+      if (offset === 0) setTabLoading(tabKey);
+      else setTabLoadingMore(tabKey);
       try {
         const res = await fetch(
-          `${API_BASE}/sheet-data?spreadsheetId=${encodeURIComponent(
-            spreadsheetId
-          )}&sheetName=${encodeURIComponent(sheetName)}`
+          `${API_BASE}/sheet-data?spreadsheetId=${encodeURIComponent(spreadsheetId)}&sheetName=${encodeURIComponent(sheetName)}&offset=${offset}&limit=${LIMIT}`
         );
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           throw new Error(body.error || `HTTP ${res.status}`);
         }
-        setTabResult(tabKey, await res.json());
+        const json = await res.json();
+        if (offset === 0) setTabResult(tabKey, json);
+        else setTabAppendResult(tabKey, json);
       } catch (e) {
-        setTabError(tabKey, e.message);
+        setTabError(tabKey, e.message, offset > 0);
       }
     },
-    [setTabLoading, setTabResult, setTabError]
+    [setTabLoading, setTabLoadingMore, setTabResult, setTabAppendResult, setTabError]
   );
 
   // Fetch JSON file data from the Express server
@@ -188,6 +223,12 @@ function TableModal({
     setLoadingModal((prev) => ({ ...prev, [tabKey]: false }));
   }, []);
 
+  const handleLoadMore = useCallback(() => {
+    if (!currentTab || currentTab.jsonUrl) return;
+    const currentData = tabsState[currentTab.key]?.data ?? [];
+    fetchSheetData(currentTab.key, currentTab.spreadsheetId, currentTab.sheetName, currentData.length);
+  }, [currentTab, tabsState, fetchSheetData]);
+
   // ── Iframe rendering (unchanged) ─────────────────────────────────────────
   const renderIframe = () => (
     <>
@@ -258,7 +299,9 @@ function TableModal({
       data = [],
       columnWidths = [],
       rowHeights = {},
+      total = null,
       loading = false,
+      loadingMore = false,
       error = null,
     } = tabState;
 
@@ -340,16 +383,8 @@ function TableModal({
           </div>
         )}
 
-        {/* Loading */}
-        {loading && (
-          <div className="d-flex justify-content-center align-items-center flex-grow-1">
-            <Spinner animation="border" variant="primary" />
-            <span className="ms-2">Загрузка данных...</span>
-          </div>
-        )}
-
         {/* Error */}
-        {!loading && error && (
+        {error && (
           <div className="d-flex flex-column justify-content-center align-items-center flex-grow-1 gap-3 text-danger">
             <div>
               <strong>Ошибка:</strong> {error}
@@ -366,7 +401,7 @@ function TableModal({
         )}
 
         {/* Data view — table or raw JSON code */}
-        {!loading && !error && headers.length > 0 && (
+        {!error && (loading || headers.length > 0) && (
           <>
             {isJsonTab && viewMode === "code" ? (
               <JsonCodeViewer headers={headers} data={data} />
@@ -383,6 +418,10 @@ function TableModal({
                   }
                   sheetName={currentTab?.sheetName}
                   showSearch={showSearch}
+                  loading={loading}
+                  total={total}
+                  onLoadMore={handleLoadMore}
+                  loadingMore={loadingMore}
                 />
               </div>
             )}
