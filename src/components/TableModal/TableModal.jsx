@@ -341,6 +341,21 @@ function TableModal({
           ))}
         </div>
 
+        {/* Disclaimer */}
+        <div
+          style={{
+            padding: "5px 12px",
+            background: "#fff5f5",
+            borderBottom: "1px solid #f5c6cb",
+            flexShrink: 0,
+            fontSize: "0.78rem",
+            color: "#c0392b",
+            textAlign: "center",
+          }}
+        >
+          Данный файл является лишь демонстрационным вариантом. Часть данных может быть урезана для сохранения конфиденциальности Заказчика.
+        </div>
+
         {/* View toggle — only for JSON tabs, sits below the tab bar */}
         {isJsonTab && (
           <div
@@ -404,7 +419,7 @@ function TableModal({
         {!error && (loading || headers.length > 0) && (
           <>
             {isJsonTab && viewMode === "code" ? (
-              <JsonCodeViewer headers={headers} data={data} />
+              <JsonCodeViewer headers={headers} data={data} loading={loading} />
             ) : (
               <div style={{ flex: 1, overflow: "hidden" }}>
                 <VirtualizedTable

@@ -2,9 +2,6 @@ import { useState, useMemo } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vs } from "react-syntax-highlighter/dist/esm/styles/prism";
 
-// Bootstrap resets white-space on <code> elements which breaks newline rendering
-// inside SyntaxHighlighter's <pre><code> output.
-// Explicitly forcing white-space: pre on both tags is the fix.
 const PRE_STYLE = {
   margin: 0,
   borderRadius: 0,
@@ -21,10 +18,108 @@ const CODE_STYLE = {
   padding: 0,
 };
 
-function JsonCodeViewer({ headers, data }) {
+// ── JSON skeleton ─────────────────────────────────────────────────────────────
+
+const JSON_SKEL_STYLES = `
+  @keyframes json-shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position:  200% 0; }
+  }
+  .json-skel-line {
+    background: linear-gradient(90deg, #e8e8e8 25%, #f4f4f4 50%, #e8e8e8 75%);
+    background-size: 200% 100%;
+    animation: json-shimmer 1.4s ease-in-out infinite;
+    border-radius: 3px;
+    height: 13px;
+    display: inline-block;
+  }
+`;
+
+// Line widths mimicking typical JSON structure: brackets, keys, values
+const SKEL_LINES = [
+  { indent: 0, w: 8 },
+  { indent: 1, w: 55 },
+  { indent: 1, w: 38 },
+  { indent: 1, w: 72 },
+  { indent: 1, w: 44 },
+  { indent: 1, w: 60 },
+  { indent: 0, w: 10 },
+  { indent: 0, w: 8 },
+  { indent: 1, w: 48 },
+  { indent: 1, w: 65 },
+  { indent: 1, w: 30 },
+  { indent: 1, w: 80 },
+  { indent: 1, w: 42 },
+  { indent: 0, w: 10 },
+  { indent: 0, w: 8 },
+  { indent: 1, w: 70 },
+  { indent: 1, w: 35 },
+  { indent: 1, w: 58 },
+  { indent: 1, w: 50 },
+  { indent: 1, w: 66 },
+  { indent: 0, w: 10 },
+  { indent: 0, w: 8 },
+  { indent: 1, w: 40 },
+  { indent: 1, w: 75 },
+  { indent: 1, w: 28 },
+];
+
+function JsonSkeleton() {
+  return (
+    <>
+      <style>{JSON_SKEL_STYLES}</style>
+      <div
+        style={{
+          flex: 1,
+          overflow: "hidden",
+          background: "#f5f5f5",
+          padding: "16px 20px",
+          fontFamily: "monospace",
+        }}
+      >
+        {SKEL_LINES.map((line, i) => (
+          <div
+            key={i}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              marginBottom: 6,
+              paddingLeft: line.indent * 24,
+            }}
+          >
+            {/* line number */}
+            <span
+              style={{
+                minWidth: 28,
+                marginRight: 16,
+                color: "#ccc",
+                fontSize: 12,
+                userSelect: "none",
+              }}
+            >
+              {i + 1}
+            </span>
+            <span
+              className="json-skel-line"
+              style={{
+                width: `${line.w}%`,
+                animationDelay: `${(i % 7) * 0.08}s`,
+              }}
+            />
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+function JsonCodeViewer({ headers, data, loading = false }) {
   const [copied, setCopied] = useState(false);
 
   const jsonString = useMemo(() => {
+    if (!headers.length && !data.length) return "[]";
     const array = data.map((row) =>
       Object.fromEntries(headers.map((h, i) => [h, row[i] ?? null]))
     );
@@ -41,6 +136,10 @@ function JsonCodeViewer({ headers, data }) {
     }
   };
 
+  if (loading && !data.length) {
+    return <JsonSkeleton />;
+  }
+
   return (
     <div
       style={{
@@ -51,7 +150,6 @@ function JsonCodeViewer({ headers, data }) {
         flexDirection: "column",
       }}
     >
-      {/* Copy button — floats over the top-right of the code block */}
       <div style={{ position: "absolute", top: 26, right: 32, zIndex: 10 }}>
         <button
           className="btn btn-sm btn-outline-dark d-flex align-items-center gap-1"
