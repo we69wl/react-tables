@@ -134,7 +134,7 @@ function TableModal({
         );
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
+          throw new Error(body.error || body.detail || `HTTP ${res.status}`);
         }
         const json = await res.json();
         if (offset === 0) setTabResult(tabKey, json);
@@ -156,7 +156,7 @@ function TableModal({
         );
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
+          throw new Error(body.error || body.detail || `HTTP ${res.status}`);
         }
         setTabResult(tabKey, await res.json());
       } catch (e) {

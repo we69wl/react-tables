@@ -200,8 +200,9 @@ def get_sheet_data(
     except HttpError as e:
         status = int(e.resp.status)
         logger.error(f"[sheet-data] Google API {status}: {e}")
+        http_status = status if status in (400, 403, 404) else 502
         raise HTTPException(
-            status_code=400 if status == 400 else 500,
+            status_code=http_status,
             detail=_humanize_google_error(e, sheetName),
         )
     except Exception as e:

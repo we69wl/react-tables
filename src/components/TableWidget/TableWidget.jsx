@@ -140,7 +140,7 @@ function TableWidget({
         );
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
+          throw new Error(body.error || body.detail || `HTTP ${res.status}`);
         }
         const json = await res.json();
         if (offset === 0) setTabResult(key, json);
@@ -161,7 +161,7 @@ function TableWidget({
         );
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
+          throw new Error(body.error || body.detail || `HTTP ${res.status}`);
         }
         setTabResult(key, await res.json());
       } catch (e) {
