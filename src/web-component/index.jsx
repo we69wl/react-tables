@@ -88,7 +88,7 @@ class TableWidgetElement extends HTMLElement {
   }
 
   static get observedAttributes() {
-    return ["tabs", "api-url", "title", "label", "button-variant", "manual"];
+    return ["tabs", "api-url", "title", "label", "button-variant", "manual", "notice-text"];
   }
 
   attributeChangedCallback() {
@@ -102,6 +102,7 @@ class TableWidgetElement extends HTMLElement {
     const label = this.getAttribute("label") || "Открыть";
     const buttonVariant = this.getAttribute("button-variant") || "primary";
     const manual = this.getAttribute("manual") === "true";
+    const noticeText = this.getAttribute("notice-text") ?? undefined; // undefined → use TableWidget default
 
     this._root.render(
       React.createElement(TableWidget, {
@@ -112,6 +113,7 @@ class TableWidgetElement extends HTMLElement {
         label,
         buttonVariant,
         manual,
+        noticeText,
         portalContainer: this._portalMount,
         onReady: () => {
           if (this._pendingOpen) {

@@ -13,6 +13,8 @@ import VirtualizedTable from "../VirtualizedTable/VirtualizedTable";
 import JsonCodeViewer from "../JsonCodeViewer/JsonCodeViewer";
 
 // React 19: ref is a regular prop, no forwardRef needed
+const DEFAULT_NOTICE = "Данный файл является лишь демонстрационным вариантом. Часть данных может быть урезана для сохранения конфиденциальности Заказчика.";
+
 function TableWidget({
   tabs = [],
   apiBase = "/api",
@@ -20,6 +22,7 @@ function TableWidget({
   label = "Открыть",
   buttonVariant = "primary",
   manual = false,
+  noticeText = DEFAULT_NOTICE,
   portalContainer,
   onReady,
   ref,
@@ -327,19 +330,21 @@ function TableWidget({
           )}
 
           {/* Disclaimer */}
-          <div
-            style={{
-              padding: "5px 12px",
-              background: "#fff5f5",
-              borderBottom: "1px solid #f5c6cb",
-              flexShrink: 0,
-              fontSize: "0.78rem",
-              color: "#c0392b",
-              textAlign: "center",
-            }}
-          >
-            Данный файл является лишь демонстрационным вариантом. Часть данных может быть урезана для сохранения конфиденциальности Заказчика.
-          </div>
+          {noticeText && (
+            <div
+              style={{
+                padding: "5px 12px",
+                background: "#fff5f5",
+                borderBottom: "1px solid #f5c6cb",
+                flexShrink: 0,
+                fontSize: "0.78rem",
+                color: "#c0392b",
+                textAlign: "center",
+              }}
+            >
+              {noticeText}
+            </div>
+          )}
 
           {/* View toggle — only for JSON tabs, sits below the tab bar */}
           {isJsonTab && (
@@ -412,7 +417,7 @@ function TableWidget({
                     initialRowHeights={
                       Object.keys(rowHeights).length > 0 ? rowHeights : null
                     }
-                    sheetName={currentTab?.sheetName}
+                    dataDescription={currentTab?.dataDescription}
                     showSearch={showSearch}
                     loading={loading}
                     total={total}

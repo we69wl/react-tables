@@ -433,6 +433,7 @@ function App() {
             label: "Цены Ozon",
             spreadsheetId: "1PcE9G2QQ6lCIxKT5_SUleIOkVGfhigMYL58YBoD5jOI",
             sheetName: "Ozon",
+            dataDescription: "Демонстрация кастомной таблицы, которая может отображать как Google Sheets, так и JSON-файлы. Вкладки с Google Sheets поддерживают листалку и поиск, вкладки с JSON — только поиск."
           },
           {
             key: "ozon-pirates",

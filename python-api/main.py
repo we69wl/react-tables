@@ -121,6 +121,31 @@ def set_cached(key: str, data: dict):
         _cache[key] = {"data": data, "ts": time.time() * 1000}
 
 
+# ── Error helpers ────────────────────────────────────────────────────────────
+
+def _humanize_google_error(e: HttpError, sheet_name: str) -> str:
+    status = int(e.resp.status)
+    msg = str(e).lower()
+    try:
+        reason = (e.error_details[0].get("reason") or "").lower()
+    except Exception:
+        reason = ""
+
+    if status == 403 or reason == "forbidden":
+        return "Нет доступа к таблице. Проверьте права доступа для сервисного аккаунта."
+    if status == 404 or reason == "notfound":
+        return "Таблица не найдена. Проверьте ID таблицы."
+    if status == 400:
+        if "unable to parse range" in msg:
+            return f"Лист «{sheet_name}» не найден в таблице. Проверьте название листа в настройках."
+        if "requested entity was not found" in msg:
+            return "Таблица не найдена. Проверьте ID таблицы."
+        return f"Некорректный запрос: {e}"
+    if status >= 500:
+        return "Ошибка сервера Google. Попробуйте повторить позже."
+    return str(e) or "Не удалось загрузить данные."
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/")
@@ -177,11 +202,11 @@ def get_sheet_data(
         logger.error(f"[sheet-data] Google API {status}: {e}")
         raise HTTPException(
             status_code=400 if status == 400 else 500,
-            detail=str(e) or "Failed to load sheet",
+            detail=_humanize_google_error(e, sheetName),
         )
     except Exception as e:
         logger.error(f"[sheet-data] {e}")
-        raise HTTPException(status_code=500, detail=str(e) or "Failed to load sheet")
+        raise HTTPException(status_code=500, detail=str(e) or "Не удалось загрузить данные.")
 
 
 def _fetch_first_page(spreadsheetId: str, sheetName: str, limit: int, meta_key: str) -> dict:

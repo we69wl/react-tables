@@ -145,7 +145,7 @@ function VirtualizedTable({
   tableName = "default", // used as localStorage key namespace
   initialColWidths = null, // server-provided widths (Google Sheets pixel sizes); overridden by localStorage
   initialRowHeights = null, // server-provided heights (Google Sheets pixel sizes); overridden by localStorage
-  sheetName = null,  // displayed in the footer, e.g. "Ozon"
+  dataDescription = null,  // optional text shown in footer; null = hidden
   showSearch = true, // set false to hide the search input (e.g. when modal has its own controls)
   loading = false,
   total = null,      // total rows on server; null = all data already loaded
@@ -693,14 +693,14 @@ function VirtualizedTable({
           </div>
         )}
 
-        {/* Footer: sheet name + server-side pagination status */}
-        {(sheetName || total !== null || loadingMore) && (
+        {/* Footer: data description + server-side pagination status */}
+        {(dataDescription || total !== null || loadingMore) && (
           <div className="px-3 py-2 bg-light border-top flex-shrink-0">
-            <div className="d-flex justify-content-between align-items-center">
-              <small className="text-muted">
-                {sheetName ? `Лист: ${sheetName}` : ""}
+            <div className="d-flex justify-content-between align-items-center gap-2">
+              <small className="text-muted flex-grow-1" title={dataDescription}>
+                {dataDescription || ""}
               </small>
-              <div className="d-flex align-items-center gap-3">
+              <div className="d-flex align-items-center gap-3 flex-shrink-0">
                 {total !== null && (
                   <small className="text-muted">
                     {searchTerm

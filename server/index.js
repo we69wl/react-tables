@@ -49,6 +49,34 @@ function setCached(key, data) {
   cache.set(key, { data, ts: Date.now() });
 }
 
+// ── Error helpers ─────────────────────────────────────────────────────────────
+
+function humanizeGoogleError(err, sheetName) {
+  const status = err.code ?? err.status;
+  const msg = (err.message || "").toLowerCase();
+  const reason = (err.errors?.[0]?.reason || "").toLowerCase();
+
+  if (status === 403 || reason === "forbidden") {
+    return "Нет доступа к таблице. Проверьте права доступа для сервисного аккаунта.";
+  }
+  if (status === 404 || reason === "notfound") {
+    return "Таблица не найдена. Проверьте ID таблицы.";
+  }
+  if (status === 400) {
+    if (msg.includes("unable to parse range")) {
+      return `Лист «${sheetName}» не найден в таблице. Проверьте название листа в настройках.`;
+    }
+    if (msg.includes("requested entity was not found")) {
+      return "Таблица не найдена. Проверьте ID таблицы.";
+    }
+    return `Некорректный запрос: ${err.message}`;
+  }
+  if (status >= 500) {
+    return "Ошибка сервера Google. Попробуйте повторить позже.";
+  }
+  return err.message || "Не удалось загрузить данные.";
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 app.get("/", (_req, res) => res.send("Server is working"));
 
@@ -153,7 +181,8 @@ app.get("/api/sheet-data", async (req, res) => {
     }
   } catch (err) {
     console.error("[sheet-data]", err.message);
-    res.status(err.code === 400 ? 400 : 500).json({ error: err.message || "Failed to load sheet" });
+    const message = humanizeGoogleError(err, sheetName);
+    res.status(err.code === 400 ? 400 : 500).json({ error: message });
   }
 });
 

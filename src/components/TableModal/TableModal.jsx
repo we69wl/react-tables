@@ -8,6 +8,8 @@ import JsonCodeViewer from "../JsonCodeViewer/JsonCodeViewer";
 // Override via VITE_API_URL in .env for non-local deployments
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001/api";
 
+const DEFAULT_NOTICE = "Данный файл является лишь демонстрационным вариантом. Часть данных может быть урезана для сохранения конфиденциальности Заказчика.";
+
 function TableModal({
   show,
   onHide,
@@ -15,6 +17,7 @@ function TableModal({
   type = "iframe",
   tablesData,
   initialTabs,
+  noticeText = DEFAULT_NOTICE,
 }) {
   const tabs = useMemo(() => initialTabs ?? [], [initialTabs]);
 
@@ -342,19 +345,21 @@ function TableModal({
         </div>
 
         {/* Disclaimer */}
-        <div
-          style={{
-            padding: "5px 12px",
-            background: "#fff5f5",
-            borderBottom: "1px solid #f5c6cb",
-            flexShrink: 0,
-            fontSize: "0.78rem",
-            color: "#c0392b",
-            textAlign: "center",
-          }}
-        >
-          Данный файл является лишь демонстрационным вариантом. Часть данных может быть урезана для сохранения конфиденциальности Заказчика.
-        </div>
+        {noticeText && (
+          <div
+            style={{
+              padding: "5px 12px",
+              background: "#fff5f5",
+              borderBottom: "1px solid #f5c6cb",
+              flexShrink: 0,
+              fontSize: "0.78rem",
+              color: "#c0392b",
+              textAlign: "center",
+            }}
+          >
+            {noticeText}
+          </div>
+        )}
 
         {/* View toggle — only for JSON tabs, sits below the tab bar */}
         {isJsonTab && (
@@ -431,7 +436,7 @@ function TableModal({
                   initialRowHeights={
                     Object.keys(rowHeights).length > 0 ? rowHeights : null
                   }
-                  sheetName={currentTab?.sheetName}
+                  dataDescription={currentTab?.dataDescription}
                   showSearch={showSearch}
                   loading={loading}
                   total={total}
