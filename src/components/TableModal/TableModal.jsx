@@ -436,7 +436,6 @@ function TableModal({
                   initialRowHeights={
                     Object.keys(rowHeights).length > 0 ? rowHeights : null
                   }
-                  dataDescription={currentTab?.dataDescription}
                   showSearch={showSearch}
                   loading={loading}
                   total={total}
@@ -452,6 +451,21 @@ function TableModal({
         {!loading && !error && headers.length === 0 && (
           <div className="d-flex justify-content-center align-items-center flex-grow-1 text-muted">
             Нет данных для отображения
+          </div>
+        )}
+
+        {currentTab?.dataDescription && (
+          <div
+            style={{
+              padding: "6px 14px",
+              background: "#f8f9fa",
+              borderTop: "1px solid #dee2e6",
+              flexShrink: 0,
+              fontSize: "0.78rem",
+              color: "#6c757d",
+            }}
+          >
+            {currentTab.dataDescription}
           </div>
         )}
       </>
