@@ -112,6 +112,21 @@ function TableSkeleton({ height, showSearch }) {
             </tbody>
           </table>
         </div>
+        {/* Footer skeleton — mirrors the real footer layout */}
+        <div
+          style={{
+            padding: "8px 12px",
+            borderTop: "1px solid #dee2e6",
+            background: "#f8f9fa",
+            flexShrink: 0,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <div className="tw-skel" style={{ height: 12, width: "28%", animationDelay: "0.1s" }} />
+          <div className="tw-skel" style={{ height: 12, width: "18%", animationDelay: "0.25s" }} />
+        </div>
       </div>
     </>
   );
