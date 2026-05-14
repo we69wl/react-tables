@@ -123,7 +123,26 @@ def set_cached(key: str, data: dict):
 
 # ── Error helpers ────────────────────────────────────────────────────────────
 
-def _humanize_google_error(e: HttpError, sheet_name: str) -> str:
+def _get_sheet_names(spreadsheetId: str) -> list:
+    cache_key = f"sheet_names::{spreadsheetId}"
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    def do_get():
+        svc = build_service()
+        res = svc.spreadsheets().get(
+            spreadsheetId=spreadsheetId,
+            fields="sheets(properties(title))",
+        ).execute()
+        return [s["properties"]["title"] for s in res.get("sheets", [])]
+
+    names = _with_retry(do_get)
+    set_cached(cache_key, names)
+    return names
+
+
+def _humanize_google_error(e: HttpError, sheet_name: str, spreadsheetId: str = "") -> str:
     status = int(e.resp.status)
     msg = str(e).lower()
     try:
@@ -137,7 +156,16 @@ def _humanize_google_error(e: HttpError, sheet_name: str) -> str:
         return "Таблица не найдена. Проверьте ID таблицы."
     if status == 400:
         if "unable to parse range" in msg:
-            return f"Лист «{sheet_name}» не найден в таблице. Проверьте название листа в настройках."
+            base = f"Лист «{sheet_name}» не найден в таблице."
+            if spreadsheetId:
+                try:
+                    names = _get_sheet_names(spreadsheetId)
+                    if names:
+                        quoted = ", ".join(f"«{n}»" for n in names)
+                        return f"{base} Доступные листы: {quoted}."
+                except Exception:
+                    pass
+            return f"{base} Проверьте название листа в настройках."
         if "requested entity was not found" in msg:
             return "Таблица не найдена. Проверьте ID таблицы."
         return f"Некорректный запрос: {e}"
@@ -203,7 +231,7 @@ def get_sheet_data(
         http_status = status if status in (400, 403, 404) else 502
         raise HTTPException(
             status_code=http_status,
-            detail=_humanize_google_error(e, sheetName),
+            detail=_humanize_google_error(e, sheetName, spreadsheetId),
         )
     except Exception as e:
         logger.error(f"[sheet-data] {e}")
