@@ -97,9 +97,100 @@ def _with_retry(fn, max_retries=3):
 # ── In-memory cache — 1 hour TTL, max 500 entries ────────────────────────────
 
 CACHE_TTL_MS = 60 * 60 * 1000
+CACHE_FRESH_MS = 50 * 60 * 1000  # skip warmup if cache is younger than this
+ERROR_CACHE_TTL_MS = 5 * 60 * 1000  # cache errors for 5 minutes
 MAX_CACHE_SIZE = 500
 _cache: dict = {}
 _cache_lock = threading.Lock()
+_error_cache: dict = {}
+_error_cache_lock = threading.Lock()
+
+
+def get_cached_error(key: str):
+    with _error_cache_lock:
+        entry = _error_cache.get(key)
+        if entry is None:
+            return None
+        if time.time() * 1000 - entry["ts"] > ERROR_CACHE_TTL_MS:
+            del _error_cache[key]
+            return None
+        return entry
+
+
+def set_cached_error(key: str, status: int, detail: str):
+    with _error_cache_lock:
+        _error_cache[key] = {"status": status, "detail": detail, "ts": time.time() * 1000}
+
+
+def _is_error_cached(spreadsheetId: str, sheetName: str, offset: int = 0, limit: int = 200) -> bool:
+    key = f"{spreadsheetId}::{sheetName}::{offset}:{limit}"
+    return get_cached_error(key) is not None
+
+# ── Warmup registry — survives server restarts ────────────────────────────────
+
+WARMUP_REGISTRY_FILE = os.getenv("WARMUP_REGISTRY_FILE", "warmup_registry.json")
+_registry: list = []
+_registry_lock = threading.Lock()
+
+
+def _load_registry():
+    global _registry
+    try:
+        with open(WARMUP_REGISTRY_FILE, "r", encoding="utf-8") as f:
+            _registry = json.load(f)
+        logger.info(f"Warmup registry loaded: {len(_registry)} sheet(s)")
+    except FileNotFoundError:
+        _registry = []
+    except Exception as e:
+        logger.warning(f"Failed to load warmup registry: {e}")
+        _registry = []
+
+
+def _save_registry():
+    try:
+        with open(WARMUP_REGISTRY_FILE, "w", encoding="utf-8") as f:
+            json.dump(_registry, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save warmup registry: {e}")
+
+
+def _update_registry(sheets: list):
+    with _registry_lock:
+        existing = {(s["spreadsheetId"], s["sheetName"]) for s in _registry}
+        added = 0
+        for s in sheets:
+            key = (s["spreadsheetId"], s["sheetName"])
+            if key not in existing:
+                _registry.append(s)
+                existing.add(key)
+                added += 1
+        if added:
+            _save_registry()
+            logger.info(f"Registry updated: +{added} sheet(s), total {len(_registry)}")
+
+
+_load_registry()
+
+
+@app.on_event("startup")
+def startup_warmup():
+    sheets = list(_registry)
+    if not sheets:
+        logger.info("[startup] Warmup registry is empty — skipping")
+        return
+
+    def _do():
+        time.sleep(3)  # wait for server to fully start
+        logger.info(f"[startup] Warming up {len(sheets)} sheet(s) from registry")
+        for s in sheets:
+            try:
+                logger.info(f"[startup] Warming up: {s['sheetName']}")
+                _warmup_if_needed(s, "startup")
+            except Exception as e:
+                logger.warning(f"[startup] {s['sheetName']}: {e}")
+        logger.info("[startup] Done")
+
+    threading.Thread(target=_do, daemon=True).start()
 
 
 def get_cached(key: str):
@@ -210,6 +301,11 @@ def get_sheet_data(
         logger.info(f"Cache hit: {page_key}")
         return cached
 
+    cached_err = get_cached_error(page_key)
+    if cached_err:
+        logger.info(f"Error cache hit: {page_key}")
+        raise HTTPException(status_code=cached_err["status"], detail=cached_err["detail"])
+
     t_start = time.perf_counter()
 
     try:
@@ -229,10 +325,9 @@ def get_sheet_data(
         status = int(e.resp.status)
         logger.error(f"[sheet-data] Google API {status}: {e}")
         http_status = status if status in (400, 403, 404) else 502
-        raise HTTPException(
-            status_code=http_status,
-            detail=_humanize_google_error(e, sheetName, spreadsheetId),
-        )
+        detail = _humanize_google_error(e, sheetName, spreadsheetId)
+        set_cached_error(page_key, http_status, detail)
+        raise HTTPException(status_code=http_status, detail=detail)
     except Exception as e:
         logger.error(f"[sheet-data] {e}")
         raise HTTPException(status_code=500, detail=str(e) or "Не удалось загрузить данные.")
@@ -440,27 +535,120 @@ def get_json_data(url: str = Query(...)):
         raise HTTPException(status_code=500, detail=str(e) or "Failed to load JSON")
 
 
+# ── Warmup helpers ────────────────────────────────────────────────────────────
+
+def _is_cache_fresh(spreadsheetId: str, sheetName: str, offset: int = 0, limit: int = 200) -> bool:
+    key = f"{spreadsheetId}::{sheetName}::{offset}:{limit}"
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry is None:
+            return False
+        return time.time() * 1000 - entry["ts"] < CACHE_FRESH_MS
+
+
+def _warmup_one(s: dict, tag: str):
+    """Fetch first page unconditionally and store in page cache. Raises on error."""
+    sid, name = s["spreadsheetId"], s["sheetName"]
+    meta_key = f"{sid}::{name}::meta"
+    page_key = f"{sid}::{name}::0:200"
+    try:
+        result = _fetch_first_page(sid, name, 200, meta_key)
+        set_cached(page_key, result)
+        logger.info(f"[{tag}] OK: {name}")
+    except HttpError as e:
+        status = int(e.resp.status)
+        http_status = status if status in (400, 403, 404) else 502
+        detail = _humanize_google_error(e, name, sid)
+        set_cached_error(page_key, http_status, detail)
+        logger.warning(f"[{tag}] error cached ({http_status}): {name}")
+        raise
+
+
+def _warmup_if_needed(s: dict, tag: str) -> bool:
+    """Warm up only when cache is absent or stale. Returns True if warmed."""
+    if _is_cache_fresh(s["spreadsheetId"], s["sheetName"]):
+        logger.info(f"[{tag}] skipped (fresh): {s['sheetName']}")
+        return False
+    if _is_error_cached(s["spreadsheetId"], s["sheetName"]):
+        logger.info(f"[{tag}] skipped (error cached): {s['sheetName']}")
+        return False
+    _warmup_one(s, tag)
+    return True
+
+
 # POST /api/warmup
 # Body: [{"spreadsheetId": "...", "sheetName": "..."}]
 # Called by WordPress save_post hook — pre-warms cache for a page's sheets.
+# Skips sheets whose cache is still fresh. Registers only successfully warmed sheets.
 # Runs in a background thread so the HTTP response returns immediately.
 @app.post("/api/warmup")
 def warmup(sheets: list[dict]):
+    valid = [
+        {"spreadsheetId": s["spreadsheetId"].strip(), "sheetName": s["sheetName"].strip()}
+        for s in sheets
+        if (s.get("spreadsheetId") or "").strip() and (s.get("sheetName") or "").strip()
+    ]
+
     def _do():
-        for s in sheets:
-            sid = (s.get("spreadsheetId") or "").strip()
-            name = (s.get("sheetName") or "").strip()
-            if not sid or not name:
-                continue
+        warmed = []
+        for s in valid:
             try:
-                meta_key = f"{sid}::{name}::meta"
-                _fetch_first_page(sid, name, 200, meta_key)
-                logger.info(f"[warmup] OK: {name}")
+                if _warmup_if_needed(s, "warmup"):
+                    warmed.append(s)
             except Exception as e:
-                logger.warning(f"[warmup] {name}: {e}")
+                logger.warning(f"[warmup] {s['sheetName']}: {e}")
+        if warmed:
+            _update_registry(warmed)
 
     threading.Thread(target=_do, daemon=True).start()
-    return {"message": f"Warmup started for {len(sheets)} sheet(s)"}
+    return {"message": f"Warmup started for {len(valid)} sheet(s)"}
+
+
+# POST /api/warmup-all
+# Re-warms all registered sheets whose cache has gone stale.
+# Intended for cron: run every 50 minutes (TTL = 1 hour).
+@app.post("/api/warmup-all")
+def warmup_all():
+    with _registry_lock:
+        sheets = list(_registry)
+
+    if not sheets:
+        return {"message": "Registry is empty — nothing to warm up"}
+
+    def _do():
+        logger.info(f"[warmup-all] Starting: {len(sheets)} sheet(s)")
+        for s in sheets:
+            try:
+                _warmup_if_needed(s, "warmup-all")
+            except Exception as e:
+                logger.warning(f"[warmup-all] {s['sheetName']}: {e}")
+        logger.info("[warmup-all] Done")
+
+    threading.Thread(target=_do, daemon=True).start()
+    return {"message": f"Warmup-all started for {len(sheets)} sheet(s)"}
+
+
+# GET /api/cache/stats
+@app.get("/api/cache/stats")
+def cache_stats():
+    now = time.time() * 1000
+    with _cache_lock:
+        data_entries = [
+            {"key": k, "age_s": round((now - v["ts"]) / 1000)}
+            for k, v in _cache.items()
+        ]
+    with _error_cache_lock:
+        error_entries = [
+            {"key": k, "status": v["status"], "age_s": round((now - v["ts"]) / 1000)}
+            for k, v in _error_cache.items()
+        ]
+    with _registry_lock:
+        registry_count = len(_registry)
+    return {
+        "data_cache": {"count": len(data_entries), "entries": data_entries},
+        "error_cache": {"count": len(error_entries), "entries": error_entries},
+        "registry": {"count": registry_count},
+    }
 
 
 # POST /api/cache/clear
