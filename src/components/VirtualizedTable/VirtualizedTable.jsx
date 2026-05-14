@@ -153,6 +153,8 @@ const ROW_RESIZE_STYLES = `
   }
 `;
 
+const SHOW_ROWS_STEP = 30;
+
 function VirtualizedTable({
   data = [],
   headers = [],
@@ -160,18 +162,22 @@ function VirtualizedTable({
   tableName = "default", // used as localStorage key namespace
   initialColWidths = null, // server-provided widths (Google Sheets pixel sizes); overridden by localStorage
   initialRowHeights = null, // server-provided heights (Google Sheets pixel sizes); overridden by localStorage
-  dataDescription = null,  // optional text shown in footer; null = hidden
   showSearch = true, // set false to hide the search input (e.g. when modal has its own controls)
   loading = false,
-  total = null,      // total rows on server; null = all data already loaded
-  onLoadMore = null, // () => void — fetch next page from parent
-  loadingMore = false,
 }) {
   const inputRef = useRef(null);
   const [inputValue, setInputValue] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const debounceRef = useRef();
   const resizingRowRef = useRef(null); // { dataIndex, startY, startHeight }
+
+  // ── Client-side pagination ────────────────────────────────────────────────
+  const [showRows, setShowRows] = useState(SHOW_ROWS_STEP);
+
+  // Reset pagination when switching to a different table
+  useEffect(() => {
+    setShowRows(SHOW_ROWS_STEP);
+  }, [tableName]);
 
   // ── Zoom (0.5x – 2x, step 0.1) ───────────────────────────────────────────
   // Implemented via font-size + padding scaling to preserve position:sticky on headers.
@@ -359,7 +365,8 @@ function VirtualizedTable({
   }, [filtered, sortCol, sortDir]);
 
   const totalFiltered = sortedData.length;
-  const visibleData = sortedData;
+  // When searching show all matches; otherwise paginate client-side
+  const visibleData = searchTerm ? sortedData : sortedData.slice(0, showRows);
 
   // ── Row resize via drag ───────────────────────────────────────────────────
   const handleRowResizeMouseDown = useCallback(
@@ -708,33 +715,23 @@ function VirtualizedTable({
           </div>
         )}
 
-        {/* Footer: data description + server-side pagination status */}
-        {(dataDescription || total !== null || loadingMore) && (
+        {/* Footer: row count + client-side load more */}
+        {data.length > 0 && (
           <div className="px-3 py-2 bg-light border-top flex-shrink-0">
-            <div className="d-flex justify-content-between align-items-center gap-2">
-              <small className="text-muted flex-grow-1" title={dataDescription}>
-                {dataDescription || ""}
+            <div className="d-flex justify-content-end align-items-center gap-3">
+              <small className="text-muted">
+                {searchTerm
+                  ? `Найдено ${sortedData.length.toLocaleString()}`
+                  : `Загружено ${Math.min(showRows, sortedData.length).toLocaleString()} из ${sortedData.length.toLocaleString()}`}
               </small>
-              <div className="d-flex align-items-center gap-3 flex-shrink-0">
-                {total !== null && (
-                  <small className="text-muted">
-                    {searchTerm
-                      ? `Найдено ${totalFiltered.toLocaleString()}`
-                      : `Загружено ${data.length.toLocaleString()} из ${total.toLocaleString()}`}
-                  </small>
-                )}
-                {!searchTerm && total !== null && data.length < total && !loadingMore && (
-                  <button
-                    className="btn btn-primary btn-sm px-4 fw-semibold shadow-sm"
-                    onClick={onLoadMore}
-                  >
-                    Загрузить ещё
-                  </button>
-                )}
-                {loadingMore && (
-                  <Spinner animation="border" size="sm" variant="primary" />
-                )}
-              </div>
+              {!searchTerm && showRows < sortedData.length && (
+                <button
+                  className="btn btn-primary btn-sm px-4 fw-semibold shadow-sm"
+                  onClick={() => setShowRows((n) => n + SHOW_ROWS_STEP)}
+                >
+                  Загрузить ещё
+                </button>
+              )}
             </div>
           </div>
         )}

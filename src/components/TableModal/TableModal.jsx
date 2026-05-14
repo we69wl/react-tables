@@ -1,6 +1,5 @@
 import { Modal, Button, Spinner } from "react-bootstrap";
 
-const LIMIT = 200;
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import VirtualizedTable from "../VirtualizedTable/VirtualizedTable";
 import JsonCodeViewer from "../JsonCodeViewer/JsonCodeViewer";
@@ -52,23 +51,7 @@ function TableModal({
   const setTabLoading = useCallback((tabKey) => {
     setTabsState((prev) => ({
       ...prev,
-      [tabKey]: {
-        headers: [],
-        data: [],
-        columnWidths: [],
-        rowHeights: {},
-        total: null,
-        loading: true,
-        loadingMore: false,
-        error: null,
-      },
-    }));
-  }, []);
-
-  const setTabLoadingMore = useCallback((tabKey) => {
-    setTabsState((prev) => ({
-      ...prev,
-      [tabKey]: { ...(prev[tabKey] ?? {}), loadingMore: true },
+      [tabKey]: { headers: [], data: [], columnWidths: [], rowHeights: {}, loading: true, error: null },
     }));
   }, []);
 
@@ -80,70 +63,37 @@ function TableModal({
         data: json.data ?? [],
         columnWidths: json.columnWidths ?? [],
         rowHeights: json.rowHeights ?? {},
-        total: json.total ?? null,
         loading: false,
-        loadingMore: false,
         error: null,
       },
     }));
   }, []);
 
-  const setTabAppendResult = useCallback((tabKey, json) => {
-    setTabsState((prev) => {
-      const existing = prev[tabKey] ?? {};
-      return {
-        ...prev,
-        [tabKey]: {
-          ...existing,
-          data: [...(existing.data ?? []), ...(json.data ?? [])],
-          total: json.total ?? existing.total ?? null,
-          loading: false,
-          loadingMore: false,
-          error: null,
-        },
-      };
-    });
-  }, []);
-
-  const setTabError = useCallback((tabKey, message, append = false) => {
+  const setTabError = useCallback((tabKey, message) => {
     setTabsState((prev) => ({
       ...prev,
-      [tabKey]: append
-        ? { ...(prev[tabKey] ?? {}), loading: false, loadingMore: false, error: message }
-        : {
-            headers: [],
-            data: [],
-            columnWidths: [],
-            rowHeights: {},
-            total: null,
-            loading: false,
-            loadingMore: false,
-            error: message,
-          },
+      [tabKey]: { headers: [], data: [], columnWidths: [], rowHeights: {}, loading: false, error: message },
     }));
   }, []);
 
   // Fetch sheet data from the Express server
   const fetchSheetData = useCallback(
-    async (tabKey, spreadsheetId, sheetName, offset = 0) => {
-      if (offset === 0) setTabLoading(tabKey);
-      else setTabLoadingMore(tabKey);
+    async (tabKey, spreadsheetId, sheetName) => {
+      setTabLoading(tabKey);
       try {
         const res = await fetch(
-          `${API_BASE}/sheet-data?spreadsheetId=${encodeURIComponent(spreadsheetId)}&sheetName=${encodeURIComponent(sheetName)}&offset=${offset}&limit=${LIMIT}`
+          `${API_BASE}/sheet-data?spreadsheetId=${encodeURIComponent(spreadsheetId)}&sheetName=${encodeURIComponent(sheetName)}`
         );
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           throw new Error(body.error || body.detail || `HTTP ${res.status}`);
         }
-        const json = await res.json();
-        if (offset === 0) setTabResult(tabKey, json);
-        else setTabAppendResult(tabKey, json);
+        setTabResult(tabKey, await res.json());
       } catch (e) {
-        setTabError(tabKey, e.message, offset > 0);
+        setTabError(tabKey, e.message);
       }
     },
-    [setTabLoading, setTabLoadingMore, setTabResult, setTabAppendResult, setTabError]
+    [setTabLoading, setTabResult, setTabError]
   );
 
   // Fetch JSON file data from the Express server
@@ -226,12 +176,6 @@ function TableModal({
     setLoadingModal((prev) => ({ ...prev, [tabKey]: false }));
   }, []);
 
-  const handleLoadMore = useCallback(() => {
-    if (!currentTab || currentTab.jsonUrl) return;
-    const currentData = tabsState[currentTab.key]?.data ?? [];
-    fetchSheetData(currentTab.key, currentTab.spreadsheetId, currentTab.sheetName, currentData.length);
-  }, [currentTab, tabsState, fetchSheetData]);
-
   // ── Iframe rendering (unchanged) ─────────────────────────────────────────
   const renderIframe = () => (
     <>
@@ -302,9 +246,7 @@ function TableModal({
       data = [],
       columnWidths = [],
       rowHeights = {},
-      total = null,
       loading = false,
-      loadingMore = false,
       error = null,
     } = tabState;
 
@@ -438,9 +380,6 @@ function TableModal({
                   }
                   showSearch={showSearch}
                   loading={loading}
-                  total={total}
-                  onLoadMore={handleLoadMore}
-                  loadingMore={loadingMore}
                 />
               </div>
             )}
