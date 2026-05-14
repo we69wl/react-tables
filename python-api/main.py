@@ -440,6 +440,29 @@ def get_json_data(url: str = Query(...)):
         raise HTTPException(status_code=500, detail=str(e) or "Failed to load JSON")
 
 
+# POST /api/warmup
+# Body: [{"spreadsheetId": "...", "sheetName": "..."}]
+# Called by WordPress save_post hook — pre-warms cache for a page's sheets.
+# Runs in a background thread so the HTTP response returns immediately.
+@app.post("/api/warmup")
+def warmup(sheets: list[dict]):
+    def _do():
+        for s in sheets:
+            sid = (s.get("spreadsheetId") or "").strip()
+            name = (s.get("sheetName") or "").strip()
+            if not sid or not name:
+                continue
+            try:
+                meta_key = f"{sid}::{name}::meta"
+                _fetch_first_page(sid, name, 200, meta_key)
+                logger.info(f"[warmup] OK: {name}")
+            except Exception as e:
+                logger.warning(f"[warmup] {name}: {e}")
+
+    threading.Thread(target=_do, daemon=True).start()
+    return {"message": f"Warmup started for {len(sheets)} sheet(s)"}
+
+
 # POST /api/cache/clear
 @app.post("/api/cache/clear")
 def clear_cache():
