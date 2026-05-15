@@ -1,4 +1,4 @@
-import { Modal, Button, Spinner } from "react-bootstrap";
+import { Modal, Button, Spinner, Dropdown } from "react-bootstrap";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import VirtualizedTable from "../VirtualizedTable/VirtualizedTable";
@@ -502,30 +502,24 @@ function TableModal({
         {type === "custom" &&
           (tabsState[activeModalTab]?.headers?.length ?? 0) > 0 &&
           !tabsState[activeModalTab]?.error && (
-            <div className="me-auto d-flex gap-2">
-              <button
-                type="button"
-                className="btn btn-outline-secondary btn-sm"
-                onClick={() => handleExport("csv")}
-                disabled={xlsxLoading}
-              >
-                <i className="bi bi-filetype-csv me-1" />
-                CSV
-              </button>
-              {!currentTab?.jsonUrl && (
-                <button
-                  type="button"
-                  className="btn btn-outline-secondary btn-sm"
-                  onClick={() => handleExport("xlsx")}
-                  disabled={xlsxLoading}
-                >
-                  {xlsxLoading
-                    ? <Spinner animation="border" size="sm" className="me-1" />
-                    : <i className="bi bi-file-earmark-excel me-1" />}
-                  XLSX
-                </button>
-              )}
-            </div>
+            <Dropdown className="me-auto">
+              <Dropdown.Toggle variant="outline-secondary" size="sm" disabled={xlsxLoading}>
+                {xlsxLoading
+                  ? <Spinner animation="border" size="sm" className="me-1" />
+                  : <i className="bi bi-download me-1" />}
+                Скачать
+              </Dropdown.Toggle>
+              <Dropdown.Menu>
+                <Dropdown.Item onClick={() => handleExport("csv")}>
+                  <i className="bi bi-filetype-csv me-2" />CSV
+                </Dropdown.Item>
+                {!currentTab?.jsonUrl && (
+                  <Dropdown.Item onClick={() => handleExport("xlsx")} disabled={xlsxLoading}>
+                    <i className="bi bi-file-earmark-excel me-2" />XLSX
+                  </Dropdown.Item>
+                )}
+              </Dropdown.Menu>
+            </Dropdown>
           )}
         <Button variant="secondary" onClick={onHide}>
           Закрыть
