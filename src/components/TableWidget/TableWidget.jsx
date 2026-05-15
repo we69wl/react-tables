@@ -153,48 +153,29 @@ function TableWidget({
     fetchTab(tab);
   }, [show, activeTab, tabs, fetchTab]);
 
-  const handleExportCsv = useCallback(() => {
-    const { headers = [], data = [] } = tabsState[activeTab] ?? {};
-    if (!headers.length) return;
-    const esc = (v) => {
-      const s = v == null ? "" : String(v);
-      return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const rows = [
-      headers.map(esc).join(","),
-      ...data.map((row) => headers.map((_, i) => esc(row[i])).join(",")),
-    ];
-    const blob = new Blob(["﻿" + rows.join("\r\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${activeTab}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [activeTab, tabsState]);
-
-  const handleExportXlsx = useCallback(async () => {
-    if (!currentTab || currentTab.jsonUrl) return;
+  const handleExport = useCallback(async (format) => {
     setXlsxLoading(true);
     try {
       const res = await fetch(`${apiBase}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          spreadsheetId: currentTab.spreadsheetId,
-          sheetName: currentTab.sheetName,
+          spreadsheetId: currentTab?.spreadsheetId,
+          sheetName: currentTab?.sheetName,
+          jsonUrl: currentTab?.jsonUrl,
+          format,
         }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        alert(body.detail || `Ошибка ${res.status}`);
+        alert(body.error || `Ошибка ${res.status}`);
         return;
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${currentTab.sheetName ?? activeTab}.xlsx`;
+      a.download = `${currentTab?.sheetName ?? activeTab}.${format}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -480,7 +461,7 @@ function TableWidget({
                     <button
                       type="button"
                       className="dropdown-item"
-                      onClick={() => { setDlOpen(false); handleExportCsv(); }}
+                      onClick={() => { setDlOpen(false); handleExport("csv"); }}
                     >
                       <i className="bi bi-filetype-csv me-2" />CSV
                     </button>
@@ -491,7 +472,7 @@ function TableWidget({
                         type="button"
                         className="dropdown-item"
                         disabled={xlsxLoading}
-                        onClick={() => { setDlOpen(false); handleExportXlsx(); }}
+                        onClick={() => { setDlOpen(false); handleExport("xlsx"); }}
                       >
                         <i className="bi bi-file-earmark-excel me-2" />XLSX
                       </button>

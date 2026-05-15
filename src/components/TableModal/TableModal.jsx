@@ -178,48 +178,29 @@ function TableModal({
     setLoadingModal((prev) => ({ ...prev, [tabKey]: false }));
   }, []);
 
-  const handleExportCsv = useCallback(() => {
-    const { headers = [], data = [] } = tabsState[activeModalTab] ?? {};
-    if (!headers.length) return;
-    const esc = (v) => {
-      const s = v == null ? "" : String(v);
-      return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const rows = [
-      headers.map(esc).join(","),
-      ...data.map((row) => headers.map((_, i) => esc(row[i])).join(",")),
-    ];
-    const blob = new Blob(["﻿" + rows.join("\r\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${activeModalTab}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [activeModalTab, tabsState]);
-
-  const handleExportXlsx = useCallback(async () => {
-    if (!currentTab || currentTab.jsonUrl) return;
+  const handleExport = useCallback(async (format) => {
     setXlsxLoading(true);
     try {
       const res = await fetch(`${API_BASE}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          spreadsheetId: currentTab.spreadsheetId,
-          sheetName: currentTab.sheetName,
+          spreadsheetId: currentTab?.spreadsheetId,
+          sheetName: currentTab?.sheetName,
+          jsonUrl: currentTab?.jsonUrl,
+          format,
         }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        alert(body.detail || `Ошибка ${res.status}`);
+        alert(body.error || `Ошибка ${res.status}`);
         return;
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${currentTab.sheetName ?? activeModalTab}.xlsx`;
+      a.download = `${currentTab?.sheetName ?? activeModalTab}.${format}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -525,7 +506,8 @@ function TableModal({
               <button
                 type="button"
                 className="btn btn-outline-secondary btn-sm"
-                onClick={handleExportCsv}
+                onClick={() => handleExport("csv")}
+                disabled={xlsxLoading}
               >
                 <i className="bi bi-filetype-csv me-1" />
                 CSV
@@ -534,7 +516,7 @@ function TableModal({
                 <button
                   type="button"
                   className="btn btn-outline-secondary btn-sm"
-                  onClick={handleExportXlsx}
+                  onClick={() => handleExport("xlsx")}
                   disabled={xlsxLoading}
                 >
                   {xlsxLoading
