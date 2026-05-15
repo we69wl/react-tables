@@ -6,7 +6,7 @@ import {
   useMemo,
   useImperativeHandle,
 } from "react";
-import { Modal, Button } from "react-bootstrap";
+import { Modal, Button, Spinner } from "react-bootstrap";
 
 import VirtualizedTable from "../VirtualizedTable/VirtualizedTable";
 import JsonCodeViewer from "../JsonCodeViewer/JsonCodeViewer";
@@ -38,8 +38,22 @@ function TableWidget({
   const [activeTab, setActiveTab] = useState(tabs[0]?.key ?? "");
   const [tabsState, setTabsState] = useState({});
   const [showSearch, setShowSearch] = useState(false);
+  const [xlsxLoading, setXlsxLoading] = useState(false);
   const [viewModes, setViewModes] = useState({});
+  const [dlOpen, setDlOpen] = useState(false);
   const loadedTabsRef = useRef(new Set());
+  const dlRef = useRef(null);
+
+  // Click-outside uses composedPath() so it works across the shadow DOM boundary
+  useEffect(() => {
+    if (!dlOpen) return;
+    const close = (e) => {
+      const path = e.composedPath?.() ?? [];
+      if (dlRef.current && !path.includes(dlRef.current)) setDlOpen(false);
+    };
+    document.addEventListener("mousedown", close, true);
+    return () => document.removeEventListener("mousedown", close, true);
+  }, [dlOpen]);
 
   const currentTab = useMemo(
     () => tabs.find((t) => t.key === activeTab),
@@ -139,11 +153,64 @@ function TableWidget({
     fetchTab(tab);
   }, [show, activeTab, tabs, fetchTab]);
 
+  const handleExportCsv = useCallback(() => {
+    const { headers = [], data = [] } = tabsState[activeTab] ?? {};
+    if (!headers.length) return;
+    const esc = (v) => {
+      const s = v == null ? "" : String(v);
+      return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = [
+      headers.map(esc).join(","),
+      ...data.map((row) => headers.map((_, i) => esc(row[i])).join(",")),
+    ];
+    const blob = new Blob(["﻿" + rows.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${activeTab}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [activeTab, tabsState]);
+
+  const handleExportXlsx = useCallback(async () => {
+    if (!currentTab || currentTab.jsonUrl) return;
+    setXlsxLoading(true);
+    try {
+      const res = await fetch(`${apiBase}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spreadsheetId: currentTab.spreadsheetId,
+          sheetName: currentTab.sheetName,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(body.detail || `Ошибка ${res.status}`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${currentTab.sheetName ?? activeTab}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(`Ошибка экспорта: ${e.message}`);
+    } finally {
+      setXlsxLoading(false);
+    }
+  }, [currentTab, activeTab, apiBase]);
+
   const handleClose = useCallback(() => {
     setShow(false);
     setTabsState({});
     setViewModes({});
     setShowSearch(false);
+    setXlsxLoading(false);
+    setDlOpen(false);
     loadedTabsRef.current.clear();
     setActiveTab(tabs[0]?.key ?? "");
   }, [tabs]);
@@ -391,6 +458,49 @@ function TableWidget({
         </Modal.Body>
 
         <Modal.Footer>
+          {headers.length > 0 && !error && (
+            <div ref={dlRef} style={{ position: "relative" }} className="me-auto">
+              <button
+                type="button"
+                className="btn btn-outline-secondary btn-sm dropdown-toggle"
+                onClick={() => setDlOpen((v) => !v)}
+                disabled={xlsxLoading}
+              >
+                {xlsxLoading
+                  ? <Spinner animation="border" size="sm" className="me-1" />
+                  : <i className="bi bi-download me-1" />}
+                Скачать
+              </button>
+              {dlOpen && (
+                <ul
+                  className="dropdown-menu show"
+                  style={{ position: "absolute", bottom: "100%", left: 0, zIndex: 1050, marginBottom: "2px" }}
+                >
+                  <li>
+                    <button
+                      type="button"
+                      className="dropdown-item"
+                      onClick={() => { setDlOpen(false); handleExportCsv(); }}
+                    >
+                      <i className="bi bi-filetype-csv me-2" />CSV
+                    </button>
+                  </li>
+                  {!currentTab?.jsonUrl && (
+                    <li>
+                      <button
+                        type="button"
+                        className="dropdown-item"
+                        disabled={xlsxLoading}
+                        onClick={() => { setDlOpen(false); handleExportXlsx(); }}
+                      >
+                        <i className="bi bi-file-earmark-excel me-2" />XLSX
+                      </button>
+                    </li>
+                  )}
+                </ul>
+              )}
+            </div>
+          )}
           <Button variant="secondary" onClick={handleClose}>
             Закрыть
           </Button>

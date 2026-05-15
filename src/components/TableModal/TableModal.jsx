@@ -30,6 +30,7 @@ function TableModal({
   const loadedTabsRef = useRef(new Set());
 
   const [showSearch, setShowSearch] = useState(false);
+  const [xlsxLoading, setXlsxLoading] = useState(false);
 
   // "table" | "code" per tab — only relevant for tabs with jsonUrl
   const [viewModes, setViewModes] = useState({});
@@ -150,6 +151,7 @@ function TableModal({
       setTabsState({});
       setLoadingModal({});
       setViewModes({});
+      setXlsxLoading(false);
       loadedTabsRef.current.clear();
       setActiveModalTab(tabs[0]?.key ?? "");
     }
@@ -175,6 +177,57 @@ function TableModal({
   const handleModalLoad = useCallback((tabKey) => {
     setLoadingModal((prev) => ({ ...prev, [tabKey]: false }));
   }, []);
+
+  const handleExportCsv = useCallback(() => {
+    const { headers = [], data = [] } = tabsState[activeModalTab] ?? {};
+    if (!headers.length) return;
+    const esc = (v) => {
+      const s = v == null ? "" : String(v);
+      return /[,"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = [
+      headers.map(esc).join(","),
+      ...data.map((row) => headers.map((_, i) => esc(row[i])).join(",")),
+    ];
+    const blob = new Blob(["﻿" + rows.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${activeModalTab}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [activeModalTab, tabsState]);
+
+  const handleExportXlsx = useCallback(async () => {
+    if (!currentTab || currentTab.jsonUrl) return;
+    setXlsxLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spreadsheetId: currentTab.spreadsheetId,
+          sheetName: currentTab.sheetName,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(body.detail || `Ошибка ${res.status}`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${currentTab.sheetName ?? activeModalTab}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(`Ошибка экспорта: ${e.message}`);
+    } finally {
+      setXlsxLoading(false);
+    }
+  }, [currentTab, activeModalTab]);
 
   // ── Iframe rendering (unchanged) ─────────────────────────────────────────
   const renderIframe = () => (
@@ -465,6 +518,33 @@ function TableModal({
         {type === "iframe" ? renderIframe() : renderCustomTable()}
       </Modal.Body>
       <Modal.Footer>
+        {type === "custom" &&
+          (tabsState[activeModalTab]?.headers?.length ?? 0) > 0 &&
+          !tabsState[activeModalTab]?.error && (
+            <div className="me-auto d-flex gap-2">
+              <button
+                type="button"
+                className="btn btn-outline-secondary btn-sm"
+                onClick={handleExportCsv}
+              >
+                <i className="bi bi-filetype-csv me-1" />
+                CSV
+              </button>
+              {!currentTab?.jsonUrl && (
+                <button
+                  type="button"
+                  className="btn btn-outline-secondary btn-sm"
+                  onClick={handleExportXlsx}
+                  disabled={xlsxLoading}
+                >
+                  {xlsxLoading
+                    ? <Spinner animation="border" size="sm" className="me-1" />
+                    : <i className="bi bi-file-earmark-excel me-1" />}
+                  XLSX
+                </button>
+              )}
+            </div>
+          )}
         <Button variant="secondary" onClick={onHide}>
           Закрыть
         </Button>

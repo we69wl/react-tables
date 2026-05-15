@@ -1,16 +1,21 @@
+import io
 import os
 import json
+from urllib.parse import quote
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from google.oauth2 import service_account
 import httplib2
 import google_auth_httplib2
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import requests as req_lib
+import xlsxwriter
 from dotenv import load_dotenv
 import logging
 
@@ -102,6 +107,9 @@ CACHE_FRESH_MS  = int(os.getenv("CACHE_FRESH_MS",  str(5 * 60 * 60 * 1000)))   #
 ERROR_CACHE_TTL_MS = int(os.getenv("ERROR_CACHE_TTL_MS", str(5 * 60 * 1000)))  # default 5min
 MAX_CACHE_SIZE  = int(os.getenv("MAX_CACHE_SIZE",  "1000"))
 WARMUP_WORKERS  = int(os.getenv("WARMUP_WORKERS",  "10"))
+# XLSX export: skip per-cell formatting fetch for sheets larger than this many rows.
+# Above this threshold the includeGridData response is huge and OOMs the process.
+EXPORT_FORMAT_MAX_ROWS = int(os.getenv("EXPORT_FORMAT_MAX_ROWS", "5000"))
 _cache: dict = {}
 _cache_lock = threading.Lock()
 _error_cache: dict = {}
@@ -579,3 +587,263 @@ def clear_cache():
         _error_cache.clear()
     logger.info(f"Cache cleared ({count} data + {err_count} error entries)")
     return {"message": f"Cache cleared ({count} data + {err_count} error entries)"}
+
+
+# POST /api/export
+# Body: { "spreadsheetId": "...", "sheetName": "..." }
+# Returns an XLSX file built from cached data.
+# 404 if the sheet hasn't been loaded yet — open the modal first to populate the cache.
+
+class ExportRequest(BaseModel):
+    spreadsheetId: str
+    sheetName: str
+
+
+@app.post("/api/export")
+def export_xlsx(req: ExportRequest):
+    sid = req.spreadsheetId.strip()
+    sname = req.sheetName.strip()
+    cache_key = f"{sid}::{sname}"
+
+    cached = get_cached(cache_key)
+    if not cached:
+        raise HTTPException(
+            status_code=404,
+            detail="Данные не найдены в кэше. Сначала откройте таблицу в браузере.",
+        )
+
+    headers = cached.get("headers") or []
+    data = cached.get("data") or []
+    cached_col_widths = cached.get("columnWidths") or []
+    cached_row_heights = cached.get("rowHeights") or {}
+    num_rows = len(data) + 1  # including header row
+
+    # Skip per-cell formatting for large sheets — the includeGridData payload is
+    # enormous for 5k+ rows and will OOM or timeout the process.
+    use_fmt = num_rows <= EXPORT_FORMAT_MAX_ROWS
+
+    # ── Fetch cell formatting from Google Sheets API ──────────────────────────
+    fmt_row_data: list = []
+    fmt_col_meta: list = []
+    fmt_row_meta: list = []
+    merges: list = []
+
+    if use_fmt:
+        def do_get_format():
+            svc = build_service()
+            return svc.spreadsheets().get(
+                spreadsheetId=sid,
+                ranges=[f"'{sname}'!1:{num_rows}"],
+                includeGridData=True,
+                fields=(
+                    "sheets(properties(title),"
+                    "data(startRow,startColumn,"
+                    "columnMetadata(pixelSize),"
+                    "rowMetadata(pixelSize),"
+                    "rowData(values(effectiveFormat))),"
+                    "merges)"
+                ),
+            ).execute()
+
+        try:
+            fmt_res = _with_retry(do_get_format)
+            for s in fmt_res.get("sheets", []):
+                if s.get("properties", {}).get("title") == sname:
+                    merges = s.get("merges", [])
+                    blocks = s.get("data", [])
+                    if blocks:
+                        b = blocks[0]
+                        fmt_row_data = b.get("rowData", [])
+                        fmt_col_meta = b.get("columnMetadata", [])
+                        fmt_row_meta = b.get("rowMetadata", [])
+                    break
+        except Exception as e:
+            logger.warning(f"[export] Formatting fetch failed ({e}) — using basic style")
+            use_fmt = False
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _rgb_hex(color: dict) -> str | None:
+        if not color:
+            return None
+        r = round(color.get("red", 0) * 255)
+        g = round(color.get("green", 0) * 255)
+        b = round(color.get("blue", 0) * 255)
+        h = f"#{r:02X}{g:02X}{b:02X}"
+        return None if h in ("#FFFFFF", "#000000") else h
+
+    _BORDER_STYLE = {
+        "SOLID": 1, "SOLID_MEDIUM": 2, "SOLID_THICK": 5,
+        "DOTTED": 4, "DASHED": 8, "DOUBLE": 6,
+    }
+
+    # ── Build XLSX ────────────────────────────────────────────────────────────
+    output = io.BytesIO()
+    # constant_memory streams rows to a temp file instead of RAM — required for
+    # large sheets; merge_range is not supported in that mode so we skip merges.
+    workbook_opts = {"in_memory": True} if use_fmt else {"constant_memory": True}
+    workbook = xlsxwriter.Workbook(output, workbook_opts)
+    worksheet = workbook.add_worksheet(sname[:31])
+
+    fmt_cache: dict = {}
+
+    def _get_fmt(eff: dict | None) -> "xlsxwriter.format.Format":
+        key = json.dumps(eff, sort_keys=True, default=str) if eff else ""
+        if key in fmt_cache:
+            return fmt_cache[key]
+
+        p: dict = {}
+        if eff:
+            # Background
+            bg = eff.get("backgroundColor") or (
+                eff.get("backgroundColorStyle") or {}
+            ).get("rgbColor")
+            if bg:
+                h = _rgb_hex(bg)
+                if h:
+                    p["bg_color"] = h
+
+            # Text format
+            tf = eff.get("textFormat") or {}
+            if tf.get("bold"):        p["bold"] = True
+            if tf.get("italic"):      p["italic"] = True
+            if tf.get("strikethrough"): p["font_strikeout"] = True
+            if tf.get("underline"):   p["underline"] = 1
+            if tf.get("fontSize"):    p["font_size"] = tf["fontSize"]
+            if tf.get("fontFamily"):  p["font_name"] = tf["fontFamily"]
+            fg = tf.get("foregroundColor") or (
+                tf.get("foregroundColorStyle") or {}
+            ).get("rgbColor")
+            if fg:
+                h = _rgb_hex(fg)
+                if h:
+                    p["font_color"] = h
+
+            # Alignment
+            ha = eff.get("horizontalAlignment", "").upper()
+            if ha in ("LEFT", "CENTER", "RIGHT"):
+                p["align"] = ha.lower()
+            va = eff.get("verticalAlignment", "").upper()
+            va_map = {"TOP": "top", "MIDDLE": "vcenter", "BOTTOM": "bottom"}
+            if va in va_map:
+                p["valign"] = va_map[va]
+
+            if eff.get("wrapStrategy") == "WRAP":
+                p["text_wrap"] = True
+
+            # Number format
+            nf = (eff.get("numberFormat") or {}).get("pattern")
+            if nf:
+                p["num_format"] = nf
+
+            # Borders
+            for side in ("top", "bottom", "left", "right"):
+                bd = (eff.get("borders") or {}).get(side) or {}
+                bs = _BORDER_STYLE.get(bd.get("style", ""), 0)
+                if bs:
+                    p[side] = bs
+                    bc = bd.get("color") or (bd.get("colorStyle") or {}).get("rgbColor")
+                    if bc:
+                        h = _rgb_hex(bc)
+                        if h:
+                            p[f"{side}_color"] = h
+
+        fmt = workbook.add_format(p)
+        fmt_cache[key] = fmt
+        return fmt
+
+    # ── Column widths (pixels → Excel char units, ~7 px per char) ────────────
+    for ci in range(len(headers)):
+        px = (fmt_col_meta[ci].get("pixelSize") if ci < len(fmt_col_meta) else None) \
+            or (cached_col_widths[ci] if ci < len(cached_col_widths) else None)
+        if px:
+            worksheet.set_column(ci, ci, min(px / 7, 80))
+        else:
+            max_len = max(
+                (len(str(row[ci])) for row in data if ci < len(row) and row[ci] is not None),
+                default=0,
+            )
+            worksheet.set_column(ci, ci, min(max(len(str(headers[ci])), max_len) + 2, 50))
+
+    # ── Merged cell coordinates (skip writing non-top-left cells) ─────────────
+    merged_skip: set = set()
+    if use_fmt:
+        for mg in merges:
+            sr, er = mg.get("startRowIndex", 0), mg.get("endRowIndex", 0) - 1
+            sc, ec = mg.get("startColumnIndex", 0), mg.get("endColumnIndex", 0) - 1
+            for r in range(sr, er + 1):
+                for c in range(sc, ec + 1):
+                    if r != sr or c != sc:
+                        merged_skip.add((r, c))
+
+    # ── Write rows ────────────────────────────────────────────────────────────
+    for ri in range(num_rows):
+        # Row height (pixels → points, 1 pt ≈ 1.333 px)
+        px_h = (fmt_row_meta[ri].get("pixelSize") if ri < len(fmt_row_meta) else None)
+        if px_h is None and ri > 0:
+            px_h = cached_row_heights.get(ri - 1) or cached_row_heights.get(str(ri - 1))
+        if px_h:
+            worksheet.set_row(ri, px_h * 0.75)
+
+        rd = fmt_row_data[ri] if ri < len(fmt_row_data) else {}
+        cell_vals = (rd.get("values") or []) if rd else []
+
+        for ci in range(len(headers)):
+            if (ri, ci) in merged_skip:
+                continue
+            eff = (cell_vals[ci].get("effectiveFormat") if ci < len(cell_vals) else None)
+            fmt = _get_fmt(eff)
+            val = headers[ci] if ri == 0 else (
+                data[ri - 1][ci] if ci < len(data[ri - 1]) else ""
+            )
+            if val is None:
+                val = ""
+            worksheet.write(ri, ci, val, fmt)
+
+    # ── Merged ranges (constant_memory mode doesn't support merge_range) ────────
+    if not use_fmt:
+        worksheet.freeze_panes(1, 0)
+        workbook.close()
+        output.seek(0)
+        filename = f"{sname}.xlsx"
+        encoded = quote(filename)
+        safe_ascii = sname.encode("ascii", "replace").decode().replace("?", "_") + ".xlsx"
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=\"{safe_ascii}\"; filename*=UTF-8''{encoded}"},
+        )
+
+    for mg in merges:
+        sr, er = mg.get("startRowIndex", 0), mg.get("endRowIndex", 0) - 1
+        sc, ec = mg.get("startColumnIndex", 0), mg.get("endColumnIndex", 0) - 1
+        if sr >= num_rows or sc >= len(headers):
+            continue
+        er, ec = min(er, num_rows - 1), min(ec, len(headers) - 1)
+        if sr == er and sc == ec:
+            continue
+        rd = fmt_row_data[sr] if sr < len(fmt_row_data) else {}
+        cell_vals = (rd.get("values") or []) if rd else []
+        eff = (cell_vals[sc].get("effectiveFormat") if sc < len(cell_vals) else None)
+        val = headers[sc] if sr == 0 else (
+            data[sr - 1][sc] if sc < len(data[sr - 1]) else ""
+        )
+        if val is None:
+            val = ""
+        try:
+            worksheet.merge_range(sr, sc, er, ec, val, _get_fmt(eff))
+        except Exception:
+            pass  # ignore overlapping merge errors
+
+    worksheet.freeze_panes(1, 0)
+    workbook.close()
+    output.seek(0)
+
+    filename = f"{sname}.xlsx"
+    encoded = quote(filename)
+    safe_ascii = sname.encode("ascii", "replace").decode().replace("?", "_") + ".xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=\"{safe_ascii}\"; filename*=UTF-8''{encoded}"},
+    )
