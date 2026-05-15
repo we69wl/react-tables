@@ -2,6 +2,7 @@ import os
 import json
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from google.oauth2 import service_account
@@ -94,12 +95,13 @@ def _with_retry(fn, max_retries=3):
     raise last_exc  # unreachable but satisfies type checkers
 
 
-# ── In-memory cache — 1 hour TTL, max 500 entries ────────────────────────────
+# ── In-memory cache — configurable via .env ──────────────────────────────────
 
-CACHE_TTL_MS = 60 * 60 * 1000
-CACHE_FRESH_MS = 50 * 60 * 1000  # skip warmup if cache is younger than this
-ERROR_CACHE_TTL_MS = 5 * 60 * 1000  # cache errors for 5 minutes
-MAX_CACHE_SIZE = 500
+CACHE_TTL_MS    = int(os.getenv("CACHE_TTL_MS",    str(6 * 60 * 60 * 1000)))   # default 6h
+CACHE_FRESH_MS  = int(os.getenv("CACHE_FRESH_MS",  str(5 * 60 * 60 * 1000)))   # default 5h
+ERROR_CACHE_TTL_MS = int(os.getenv("ERROR_CACHE_TTL_MS", str(5 * 60 * 1000)))  # default 5min
+MAX_CACHE_SIZE  = int(os.getenv("MAX_CACHE_SIZE",  "1000"))
+WARMUP_WORKERS  = int(os.getenv("WARMUP_WORKERS",  "10"))
 _cache: dict = {}
 _cache_lock = threading.Lock()
 _error_cache: dict = {}
@@ -181,13 +183,15 @@ def startup_warmup():
 
     def _do():
         time.sleep(3)  # wait for server to fully start
-        logger.info(f"[startup] Warming up {len(sheets)} sheet(s) from registry")
-        for s in sheets:
-            try:
-                logger.info(f"[startup] Warming up: {s['sheetName']}")
-                _warmup_if_needed(s, "startup")
-            except Exception as e:
-                logger.warning(f"[startup] {s['sheetName']}: {e}")
+        logger.info(f"[startup] Warming up {len(sheets)} sheet(s), workers={WARMUP_WORKERS}")
+        with ThreadPoolExecutor(max_workers=WARMUP_WORKERS) as pool:
+            future_to_sheet = {pool.submit(_warmup_if_needed, s, "startup"): s for s in sheets}
+            for fut in as_completed(future_to_sheet):
+                s = future_to_sheet[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.warning(f"[startup] {s['sheetName']}: {e}")
         logger.info("[startup] Done")
 
     threading.Thread(target=_do, daemon=True).start()
@@ -497,12 +501,16 @@ def warmup(sheets: list[dict]):
 
     def _do():
         warmed = []
-        for s in valid:
-            try:
-                if _warmup_if_needed(s, "warmup"):
-                    warmed.append(s)
-            except Exception as e:
-                logger.warning(f"[warmup] {s['sheetName']}: {e}")
+        workers = min(WARMUP_WORKERS, len(valid)) if valid else 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            future_to_sheet = {pool.submit(_warmup_if_needed, s, "warmup"): s for s in valid}
+            for fut in as_completed(future_to_sheet):
+                s = future_to_sheet[fut]
+                try:
+                    if fut.result():
+                        warmed.append(s)
+                except Exception as e:
+                    logger.warning(f"[warmup] {s['sheetName']}: {e}")
         if warmed:
             _update_registry(warmed)
 
@@ -512,7 +520,7 @@ def warmup(sheets: list[dict]):
 
 # POST /api/warmup-all
 # Re-warms all registered sheets whose cache has gone stale.
-# Intended for cron: run every 50 minutes (TTL = 1 hour).
+# Intended for cron: run every 6 hours (CACHE_TTL default = 6h, CACHE_FRESH default = 5h).
 @app.post("/api/warmup-all")
 def warmup_all():
     with _registry_lock:
@@ -522,12 +530,15 @@ def warmup_all():
         return {"message": "Registry is empty — nothing to warm up"}
 
     def _do():
-        logger.info(f"[warmup-all] Starting: {len(sheets)} sheet(s)")
-        for s in sheets:
-            try:
-                _warmup_if_needed(s, "warmup-all")
-            except Exception as e:
-                logger.warning(f"[warmup-all] {s['sheetName']}: {e}")
+        logger.info(f"[warmup-all] Starting: {len(sheets)} sheet(s), workers={WARMUP_WORKERS}")
+        with ThreadPoolExecutor(max_workers=WARMUP_WORKERS) as pool:
+            future_to_sheet = {pool.submit(_warmup_if_needed, s, "warmup-all"): s for s in sheets}
+            for fut in as_completed(future_to_sheet):
+                s = future_to_sheet[fut]
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.warning(f"[warmup-all] {s['sheetName']}: {e}")
         logger.info("[warmup-all] Done")
 
     threading.Thread(target=_do, daemon=True).start()
